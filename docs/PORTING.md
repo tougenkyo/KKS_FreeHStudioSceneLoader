@@ -56,7 +56,8 @@ KKSのゲーム側の処理（`[MODDING] Tools` の dnSpy.Console で逆コン�
 | 0.1.6 | KKS_AssetImport が `SceneInfo.Load(string)` に処理を差し込んでおり、スタジオ外では例外を出す | `Load(string, out Version)` を直接呼ぶようにした（ExtendedSave / Sideloader はこちらに差し込んでいる） |
 | 0.1.7 | KKSUS の OptimizeNEO が `TreeNodeObject.treeState` などに後処理を差し込んでおり、例外を出す | Finalizer で例外を受け止める（スタジオのホストが動いている間だけ） |
 | 0.1.8 | `SetVisibleChild` などのパッチを移植し忘れていた。スタジオの音声アイテムが読み込み時に鳴った | パッチを追加した。`SEComponent.OnEnable` を止めた（設定で再生できるようにした） |
+| 0.1.9 | Hシーンから選択画面に戻ると `SceneInfo.Init` でNRE。`DeleteAllNode` がホストの子（CameraControl の入れ物）まで消していた | ツリーノード専用の入れ物 `TreeNodes` を作り、その子だけを消すようにした |
+| 0.1.10 | KK形式のシーンで、キャラクターの後のデータを読むところで `EndOfStreamException`。メインゲームの `ChaFile.LoadFile(BinaryReader)` は、カードの目印が `【KoiKatuCharaSun】` でないと途中で読むのをやめる。スタジオ版は目印を確認しない（2つの Assembly-CSharp を比べた違いはこの1か所と、衣装の数の扱いだけ） | Transpiler で目印の比較を差し替えた。シーンを読んでいる間だけ、KKの目印（`ChaFileDefine.KoikatsuCharaFileMarkCheck`）も通す |
 
 ### 未確認・既知の制限
-- 無印コイカツ（KK）形式のシーン（バージョン 1.0.x）は、キャラクターデータを読んだ後に失敗するものがある。原因は未調査（スタジオで開けるかどうかの確認待ち）
 - 目に見えるアイテム（家具など）の位置・色・マテリアルの再現は、まだ確認していない

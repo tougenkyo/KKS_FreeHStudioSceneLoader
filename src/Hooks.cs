@@ -394,6 +394,45 @@ namespace KKS_FreeHStudioSceneLoader
             }
             return null;
         }
+
+        #endregion
+
+        #region Character cards inside Koikatsu-format scenes
+
+        private const string KKSCharaMark = "【KoiKatuCharaSun】";
+
+        // The main game's ChaFile.LoadFile(BinaryReader) stops when the card mark is not the KKS one, leaving the
+        // reader in the middle of the card, so every following object in a Koikatsu-format scene is misread.
+        // Studio's version of the same method does not check the mark. Do the same while loading a scene.
+        [HarmonyTranspiler, HarmonyPatch(typeof(ChaFile), nameof(ChaFile.LoadFile), typeof(BinaryReader), typeof(bool), typeof(bool))]
+        private static IEnumerable<CodeInstruction> ChaFile_LoadFile_Transpiler(IEnumerable<CodeInstruction> instructions)
+        {
+            var inequality = AccessTools.Method(typeof(string), "op_Inequality", new[] { typeof(string), typeof(string) });
+            var list = new List<CodeInstruction>(instructions);
+            var found = false;
+            for (int i = 1; i < list.Count; i++)
+            {
+                if (list[i - 1].opcode == System.Reflection.Emit.OpCodes.Ldstr && (string)list[i - 1].operand == KKSCharaMark && list[i].Calls(inequality))
+                {
+                    list[i].operand = AccessTools.Method(typeof(Hooks), nameof(CharaMarkMismatch));
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) throw new System.InvalidOperationException("Card mark check not found in ChaFile.LoadFile");
+            return list;
+        }
+
+        private static bool CharaMarkMismatch(string mark, string expected)
+        {
+            if (mark == expected) return false;
+            return !(StudioHost.IsLoadingScene && System.Linq.Enumerable.Contains(ChaFileDefine.KoikatsuCharaFileMarkCheck, mark));
+        }
+
+        #endregion
+
+        #region Studio: tree nodes (continued)
+
         [HarmonyPrefix, HarmonyPatch(typeof(TreeNodeObject), nameof(TreeNodeObject.Select))]
         private static bool TreeNodeObject_Select() => Off;
         [HarmonyPrefix, HarmonyPatch(typeof(TreeNodeObject), nameof(TreeNodeObject.SetStateVisible))]

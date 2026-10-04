@@ -26,6 +26,9 @@ namespace KKS_FreeHStudioSceneLoader
         internal static bool IsReady => Created && Singleton<Info>.IsInstance() && Singleton<Info>.Instance.isLoadList;
         internal static bool HasSceneData => _sceneInfo != null;
 
+        /// <summary>True while <see cref="LoadSceneData"/> reads a scene file (Studio-style card loading).</summary>
+        internal static bool IsLoadingScene { get; private set; }
+
         /// <summary>Parent of the UI-less tree nodes, so that cleaning them up never touches other host objects.</summary>
         internal static Transform TreeNodeRoot { get; private set; }
 
@@ -125,6 +128,7 @@ namespace KKS_FreeHStudioSceneLoader
             DiscardSceneData();
             var sceneInfo = new SceneInfo();
             Singleton<Studio.Studio>.Instance.sceneInfo = sceneInfo;
+            IsLoadingScene = true;
             try
             {
                 // Call the (path, out version) overload directly: ExtendedSave/Sideloader hook this one, while
@@ -136,6 +140,10 @@ namespace KKS_FreeHStudioSceneLoader
             {
                 FreeHStudioSceneLoader.Logger.LogError($"Failed to load scene {path}: {ex}");
                 return false;
+            }
+            finally
+            {
+                IsLoadingScene = false;
             }
             _sceneInfo = sceneInfo;
             studioMapNo = sceneInfo.map;
