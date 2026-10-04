@@ -1,0 +1,11 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net35</TargetFramework>
+    <AssemblyName>KK_FreeHStudioSceneLoader</AssemblyName>
+  </PropertyGroup>
+
+  <Import Project="..\Shared\Shared.projitems" Label="Shared" />
+
+  <!--Obsolete/broken plugin, do not create releases-->
+  <Target Name="CreateReleaseZip"/>
+</Project>

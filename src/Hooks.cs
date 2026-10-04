@@ -1,0 +1,406 @@
+﻿// Koikatsu Sunshine port of FreeHStudioSceneLoader.
+// Original: IllusionMods/KK_Plugins - FreeHStudioSceneLoader.KK by DeathWeasel1337 (GPL-3.0).
+// Modified for Koikatsu Sunshine, 2026. Licensed under GPL-3.0.
+//
+// Studio UI patches below are carried over from the original plugin. They were checked against the
+// Koikatsu Sunshine implementations of the same methods; only the ones needed to place items, folders
+// and lights without the Studio UI are kept. All of them do nothing until the Studio host is created.
+using System.Collections;
+using System.Collections.Generic;
+using System.IO;
+using HarmonyLib;
+using Studio;
+using UnityEngine;
+using UnityEngine.UI;
+
+namespace KKS_FreeHStudioSceneLoader
+{
+    internal static class Hooks
+    {
+        /// <summary>Run the original method (Studio host not created).</summary>
+        private static bool Off => !StudioHost.Created;
+
+        #region Game: Free H screen and H scene
+
+        [HarmonyPostfix, HarmonyPatch(typeof(FreeHScene), nameof(FreeHScene.Start))]
+        private static void FreeHScene_Start(FreeHScene __instance)
+        {
+            // Never let this plugin break the Free H screen
+            try { FreeHStudioSceneLoader.Instance.OnFreeHSceneStart(__instance); }
+            catch (System.Exception ex) { FreeHStudioSceneLoader.Logger.LogError($"OnFreeHSceneStart: {ex}"); }
+        }
+
+        [HarmonyPostfix, HarmonyPatch(typeof(FreeHScene), nameof(FreeHScene.SetMapSprite))]
+        private static void FreeHScene_SetMapSprite(FreeHScene __instance, MapInfo.Param _mapInfo)
+        {
+            if (!Selection.IsSelected || _mapInfo == null) return;
+            if (_mapInfo.No != Selection.MapNo)
+            {
+                // Another map was chosen in the normal map selection
+                Selection.Clear();
+                return;
+            }
+            ApplySceneThumbnail(__instance);
+        }
+
+        internal static void ApplySceneThumbnail(FreeHScene freeH)
+        {
+            if (!Selection.IsSelected) return;
+            Sprite sprite;
+            try { sprite = PngAssist.LoadSpriteFromFile(Selection.ScenePath); }
+            catch { return; }
+            var name = "[Studio] " + Path.GetFileNameWithoutExtension(Selection.ScenePath);
+            foreach (var img in new[] { freeH.mapImageNormal, freeH.mapImageMasturbation, freeH.mapImageLesbian, freeH.mapImage3P })
+                if (img != null) img.sprite = sprite;
+            foreach (var txt in new[] { freeH.mapNameNormal, freeH.mapNameMasturbation, freeH.mapNameLesbian, freeH.mapName3P })
+                if (txt != null) txt.text = name;
+        }
+
+        [HarmonyPrefix, HarmonyPatch(typeof(HSceneProc), nameof(HSceneProc.Start))]
+        private static void HSceneProc_Start(HSceneProc __instance)
+        {
+            if (!Selection.IsSelected || !StudioHost.HasSceneData) return;
+            FreeHStudioSceneLoader.Instance.StartCoroutine(LoadOverlayWhenMapReady(__instance, Selection.MapNo));
+        }
+
+        private static IEnumerator LoadOverlayWhenMapReady(HSceneProc proc, int mapNo)
+        {
+            float timeout = Time.realtimeSinceStartup + 120f;
+            while (proc != null && Time.realtimeSinceStartup < timeout)
+            {
+                var map = proc.map;
+                if (map != null && !map.isMapLoading && map.mapRoot != null && map.no == mapNo && proc.flags != null)
+                    break;
+                yield return null;
+            }
+            if (proc == null || Time.realtimeSinceStartup >= timeout)
+            {
+                FreeHStudioSceneLoader.Logger.LogWarning("H map was not loaded in time, studio objects not placed");
+                yield break;
+            }
+            if (!proc.flags.isFreeH)
+                yield break;
+            yield return null;
+            StudioHost.LoadOverlay();
+        }
+
+        [HarmonyPrefix, HarmonyPatch(typeof(HSceneProc), nameof(HSceneProc.OnDestroy))]
+        private static void HSceneProc_OnDestroy()
+        {
+            if (Off) return;
+            StudioHost.UnloadOverlay();
+            Selection.Clear();
+        }
+
+        #endregion
+
+        #region Studio: Studio
+
+        [HarmonyPrefix, HarmonyPatch(typeof(Studio.Studio), nameof(Studio.Studio.Awake))]
+        private static bool Studio_Awake(Studio.Studio __instance)
+        {
+            // Only the singleton setup; no UI, and no studio option/workspace files are touched
+            if (!__instance.CheckInstance()) return false;
+            Object.DontDestroyOnLoad(__instance.gameObject);
+            Studio.Studio.optionSystem = new OptionSystem("Option");
+            if (__instance.workInfo == null) __instance.workInfo = new WorkInfo();
+            return false;
+        }
+
+        [HarmonyPrefix, HarmonyPatch(typeof(Studio.Studio), nameof(Studio.Studio.ChangeCamera), typeof(OCICamera), typeof(bool), typeof(bool))]
+        private static bool Studio_ChangeCamera() => Off;
+
+        [HarmonyPrefix, HarmonyPatch(typeof(Studio.Studio), nameof(Studio.Studio.SetSunCaster))]
+        private static bool Studio_SetSunCaster() => Off;
+
+        // Do not save studio options/workspace from the main game
+        [HarmonyPrefix, HarmonyPatch(typeof(Studio.Studio), nameof(Studio.Studio.OnApplicationQuit))]
+        private static bool Studio_OnApplicationQuit() => Off;
+
+        #endregion
+
+        #region Studio: MapCtrl / CameraControl
+
+        [HarmonyPrefix, HarmonyPatch(typeof(MapCtrl), nameof(MapCtrl.Awake))]
+        private static bool MapCtrl_Awake(MapCtrl __instance)
+        {
+            if (Off) return true;
+            // Only the singleton setup; the rest wires up the map UI buttons that don't exist here
+            __instance.CheckInstance();
+            return false;
+        }
+
+        // The map is placed by the game; the scene's map offset (caMap) is applied to the objects instead
+        [HarmonyPrefix, HarmonyPatch(typeof(MapCtrl), nameof(MapCtrl.Reflect))]
+        private static bool MapCtrl_Reflect() => Off;
+        [HarmonyPrefix, HarmonyPatch(typeof(MapCtrl), nameof(MapCtrl.UpdateUI))]
+        private static bool MapCtrl_UpdateUI() => Off;
+
+        [HarmonyPrefix, HarmonyPatch(typeof(Studio.CameraControl), nameof(Studio.CameraControl.ExportResetData))]
+        private static bool CameraControl_ExportResetData(Studio.CameraControl __instance, ref Studio.CameraControl.CameraData __result)
+        {
+            if (Off || __instance.cameraReset != null) return true;
+            __result = new Studio.CameraControl.CameraData();
+            return false;
+        }
+
+        #endregion
+
+        #region Studio: GuideObject (from the original plugin)
+
+        private static GuideSelect _dummyGuideSelect;
+
+        [HarmonyPrefix, HarmonyPatch(typeof(GuideObject), nameof(GuideObject.guideMove), MethodType.Getter)]
+        private static bool GuideObject_guideMove(ref GuideMove[] __result)
+        {
+            if (Off) return true;
+            __result = new GuideMove[0];
+            return false;
+        }
+
+        [HarmonyPrefix, HarmonyPatch(typeof(GuideObject), nameof(GuideObject.guideSelect), MethodType.Getter)]
+        private static bool GuideObject_guideSelect(ref GuideSelect __result)
+        {
+            if (Off) return true;
+            if (_dummyGuideSelect == null) _dummyGuideSelect = new GuideSelect();
+            __result = _dummyGuideSelect;
+            return false;
+        }
+
+        [HarmonyPrefix, HarmonyPatch(typeof(GuideObject), nameof(GuideObject.enablePos), MethodType.Setter)]
+        private static bool GuideObject_enablePos() => Off;
+        [HarmonyPrefix, HarmonyPatch(typeof(GuideObject), nameof(GuideObject.enableRot), MethodType.Setter)]
+        private static bool GuideObject_enableRot() => Off;
+        [HarmonyPrefix, HarmonyPatch(typeof(GuideObject), nameof(GuideObject.enableScale), MethodType.Setter)]
+        private static bool GuideObject_enableScale() => Off;
+        [HarmonyPrefix, HarmonyPatch(typeof(GuideObject), nameof(GuideObject.SetMode))]
+        private static bool GuideObject_SetMode() => Off;
+        [HarmonyPrefix, HarmonyPatch(typeof(GuideObject), nameof(GuideObject.SetScale))]
+        private static bool GuideObject_SetScale() => Off;
+        [HarmonyPrefix, HarmonyPatch(typeof(GuideObject), nameof(GuideObject.SetVisibleCenter))]
+        private static bool GuideObject_SetVisibleCenter() => Off;
+
+        [HarmonyPrefix, HarmonyPatch(typeof(GuideObject), nameof(GuideObject.Awake))]
+        private static bool GuideObject_Awake(GuideObject __instance)
+        {
+            if (Off) return true;
+            // KKS Awake: same fields as KK, then UI (workInfo axis, selection renderer, guide parts) which is skipped
+            __instance.m_DicKey = -1;
+            __instance.isActiveFunc = null;
+            __instance.parentGuide = null;
+            __instance.enableMaluti = true;
+            __instance.calcScale = true;
+            return false;
+        }
+
+        [HarmonyPrefix, HarmonyPatch(typeof(GuideObject), nameof(GuideObject.LateUpdate))]
+        private static bool GuideObject_LateUpdate(GuideObject __instance)
+        {
+            if (Off) return true;
+            // KKS LateUpdate with null checks for the guide parts that don't exist here
+            if (__instance.transformTarget == null) return false;
+            if (__instance.parent && __instance.nonconnect)
+            {
+                __instance.CalcPosition();
+                __instance.CalcRotation();
+            }
+            __instance.transform.position = __instance.transformTarget.position;
+            __instance.transform.rotation = __instance.transformTarget.rotation;
+            var root0 = __instance.roots != null && __instance.roots.Length > 0 ? __instance.roots[0] : null;
+            if (root0 != null)
+            {
+                switch (__instance.mode)
+                {
+                    case GuideObject.Mode.Local:
+                        root0.transform.eulerAngles = __instance.parent ? __instance.parent.eulerAngles : Vector3.zero;
+                        break;
+                    case GuideObject.Mode.LocalIK:
+                        root0.transform.localEulerAngles = Vector3.zero;
+                        break;
+                    case GuideObject.Mode.World:
+                        root0.transform.eulerAngles = Vector3.zero;
+                        break;
+                }
+            }
+            if (__instance.calcScale)
+            {
+                var localScale = __instance.transformTarget.localScale;
+                var lossyScale = __instance.transformTarget.lossyScale;
+                var scale = __instance.enableScale ? __instance.changeAmount.scale : Vector3.one;
+                __instance.transformTarget.localScale = new Vector3(localScale.x / lossyScale.x * scale.x, localScale.y / lossyScale.y * scale.y, localScale.z / lossyScale.z * scale.z);
+            }
+            return false;
+        }
+
+        [HarmonyPrefix, HarmonyPatch(typeof(OCILight), nameof(OCILight.SetDrawTarget))]
+        private static bool OCILight_SetDrawTarget() => Off;
+
+        // Studio sound/voice items start playing as soon as they are enabled; don't let them play during H unless enabled
+        [HarmonyPrefix, HarmonyPatch(typeof(Studio.Sound.SEComponent), nameof(Studio.Sound.SEComponent.OnEnable))]
+        private static bool SEComponent_OnEnable() => Off || FreeHStudioSceneLoader.PlaySoundItems.Value;
+
+        #endregion
+
+        #region Studio: GuideObjectManager (from the original plugin)
+
+        [HarmonyPrefix, HarmonyPatch(typeof(GuideObjectManager), nameof(GuideObjectManager.Awake))]
+        private static void GuideObjectManager_Awake(GuideObjectManager __instance)
+        {
+            if (Off) return;
+            // The guide object prefab normally comes from the Studio scene; use an empty one
+            if (__instance.objectOriginal == null)
+            {
+                var original = new GameObject("GuideObjectOriginal");
+                original.SetActive(false);
+                original.AddComponent<GuideObject>();
+                Object.DontDestroyOnLoad(original);
+                __instance.objectOriginal = original;
+            }
+        }
+
+        [HarmonyPrefix, HarmonyPatch(typeof(GuideObjectManager), nameof(GuideObjectManager.DeleteAll))]
+        private static bool GuideObjectManager_DeleteAll(GuideObjectManager __instance)
+        {
+            if (Off) return true;
+            __instance.hashSelectObject.Clear();
+            __instance.operationTarget = null;
+            var objects = new List<GameObject>();
+            foreach (var kv in __instance.dicGuideObject)
+                if (kv.Value != null) objects.Add(kv.Value.gameObject);
+            foreach (var go in objects)
+                if (go != null) Object.DestroyImmediate(go);
+            __instance.dicGuideObject.Clear();
+            __instance.dicTransLight.Clear();
+            __instance.dicGuideLight.Clear();
+            if (__instance.drawLightLine != null) __instance.drawLightLine.Clear();
+            if (__instance.guideInput != null) __instance.guideInput.Stop();
+            return false;
+        }
+
+        #endregion
+
+        #region Studio: TreeNodeCtrl / TreeNodeObject (from the original plugin)
+
+        [HarmonyPrefix, HarmonyPatch(typeof(TreeNodeCtrl), nameof(TreeNodeCtrl.AddNode), typeof(string), typeof(TreeNodeObject))]
+        private static bool TreeNodeCtrl_AddNode(TreeNodeCtrl __instance, TreeNodeObject _parent, ref TreeNodeObject __result)
+        {
+            if (Off) return true;
+            // Node without UI. Awake sets enableAddChild etc.
+            var go = new GameObject("TreeNode");
+            go.transform.SetParent(StudioHost.TreeNodeRoot, false);
+            var node = go.AddComponent<TreeNodeObject>();
+            node.m_TreeNodeCtrl = __instance;
+            if (_parent != null)
+                node.SetParent(_parent);
+            else
+                __instance.m_TreeNodeObject.Add(node);
+            __result = node;
+            return false;
+        }
+
+        [HarmonyPrefix, HarmonyPatch(typeof(TreeNodeCtrl), nameof(TreeNodeCtrl.DeleteAllNode))]
+        private static bool TreeNodeCtrl_DeleteAllNode(TreeNodeCtrl __instance)
+        {
+            if (Off) return true;
+            foreach (var node in __instance.m_TreeNodeObject.ToArray())
+                if (node != null) Object.Destroy(node.gameObject);
+            __instance.m_TreeNodeObject.Clear();
+            __instance.hashSelectNode.Clear();
+            // Only the node container: other host objects (e.g. the camera control) are siblings of it
+            foreach (Transform child in StudioHost.TreeNodeRoot)
+                Object.Destroy(child.gameObject);
+            return false;
+        }
+
+        [HarmonyPrefix, HarmonyPatch(typeof(TreeNodeCtrl), nameof(TreeNodeCtrl.Start))]
+        private static bool TreeNodeCtrl_Start() => Off;
+        [HarmonyPrefix, HarmonyPatch(typeof(TreeNodeCtrl), nameof(TreeNodeCtrl.RefreshHierachyLoop))]
+        private static bool TreeNodeCtrl_RefreshHierachyLoop() => Off;
+        [HarmonyPrefix, HarmonyPatch(typeof(TreeNodeCtrl), nameof(TreeNodeCtrl.RefreshVisibleLoop))]
+        private static bool TreeNodeCtrl_RefreshVisibleLoop() => Off;
+        [HarmonyPrefix, HarmonyPatch(typeof(TreeNodeCtrl), nameof(TreeNodeCtrl.SetSelectNode))]
+        private static bool TreeNodeCtrl_SetSelectNode() => Off;
+        // TreeNodeCtrl.SelectMultiple is overloaded in KKS and is not used when loading, so it is not patched
+
+        [HarmonyPrefix, HarmonyPatch(typeof(TreeNodeObject), nameof(TreeNodeObject.colorSelect), MethodType.Setter)]
+        private static bool TreeNodeObject_colorSelect() => Off;
+        [HarmonyPrefix, HarmonyPatch(typeof(TreeNodeObject), nameof(TreeNodeObject.textName), MethodType.Setter)]
+        private static bool TreeNodeObject_textName_set() => Off;
+
+        [HarmonyPrefix, HarmonyPatch(typeof(TreeNodeObject), nameof(TreeNodeObject.textName), MethodType.Getter)]
+        private static bool TreeNodeObject_textName_get(ref string __result)
+        {
+            if (Off) return true;
+            __result = "";
+            return false;
+        }
+
+        [HarmonyPrefix, HarmonyPatch(typeof(TreeNodeObject), nameof(TreeNodeObject.SetVisible))]
+        private static bool TreeNodeObject_SetVisible(TreeNodeObject __instance, bool _visible)
+        {
+            if (Off) return true;
+            // Keep the visibility callback (hides items that were hidden in the scene), skip the button UI
+            __instance.m_Visible = _visible;
+            __instance.onVisible?.Invoke(_visible);
+            foreach (var child in __instance.m_child)
+                if (child != null) child.SetVisible(_visible);
+            return false;
+        }
+
+        // Child visibility is handled in TreeNodeObject_SetVisible above; the originals touch the button UI
+        [HarmonyPrefix, HarmonyPatch(typeof(TreeNodeObject), nameof(TreeNodeObject.SetVisibleChild))]
+        private static bool TreeNodeObject_SetVisibleChild() => Off;
+        [HarmonyPrefix, HarmonyPatch(typeof(TreeNodeObject), nameof(TreeNodeObject.SetVisibleLoop))]
+        private static bool TreeNodeObject_SetVisibleLoop() => Off;
+
+        [HarmonyPrefix, HarmonyPatch(typeof(TreeNodeObject), nameof(TreeNodeObject.ResetVisible))]
+        private static bool TreeNodeObject_ResetVisible(TreeNodeObject __instance)
+        {
+            if (Off) return true;
+            __instance.onVisible?.Invoke(__instance.m_Visible);
+            return false;
+        }
+
+        [HarmonyPrefix, HarmonyPatch(typeof(TreeNodeObject), nameof(TreeNodeObject.enableVisible), MethodType.Setter)]
+        private static bool TreeNodeObject_enableVisible() => Off;
+        [HarmonyPrefix, HarmonyPatch(typeof(TreeNodeObject), nameof(TreeNodeObject.SetTreeState))]
+        private static bool TreeNodeObject_SetTreeState() => Off;
+
+        // Other studio plugins (e.g. KKSUS "OptimizeNEO") postfix the tree state and expect the Studio UI.
+        // A prefix cannot stop other plugins' postfixes, so swallow their exceptions while the host is active.
+        [HarmonyFinalizer, HarmonyPatch(typeof(TreeNodeObject), nameof(TreeNodeObject.treeState), MethodType.Setter)]
+        private static System.Exception TreeNodeObject_treeState_Finalizer(System.Exception __exception) => SwallowIfHost(__exception, "TreeNodeObject.treeState");
+
+        [HarmonyFinalizer, HarmonyPatch(typeof(TreeNodeObject), nameof(TreeNodeObject.SetTreeState))]
+        private static System.Exception TreeNodeObject_SetTreeState_Finalizer(System.Exception __exception) => SwallowIfHost(__exception, "TreeNodeObject.SetTreeState");
+
+        // KKSUS also patches these; an exception there would abort the item before its colors/materials are set
+        [HarmonyFinalizer, HarmonyPatch(typeof(AddObjectItem), nameof(AddObjectItem.Load), typeof(OIItemInfo), typeof(ObjectCtrlInfo), typeof(TreeNodeObject), typeof(bool), typeof(int))]
+        private static System.Exception AddObjectItem_Load_Finalizer(System.Exception __exception) => SwallowIfHost(__exception, "AddObjectItem.Load", true);
+
+        [HarmonyFinalizer, HarmonyPatch(typeof(ItemFKCtrl), nameof(ItemFKCtrl.InitBone))]
+        private static System.Exception ItemFKCtrl_InitBone_Finalizer(System.Exception __exception) => SwallowIfHost(__exception, "ItemFKCtrl.InitBone", true);
+
+        private static readonly HashSet<string> _reportedSwallowed = new HashSet<string>();
+
+        private static System.Exception SwallowIfHost(System.Exception exception, string where, bool important = false)
+        {
+            if (exception == null || Off) return exception;
+            if (_reportedSwallowed.Add(where))
+            {
+                var msg = $"Ignored an exception on {where} (probably another plugin's patch expecting the Studio UI): {exception}";
+                if (important) FreeHStudioSceneLoader.Logger.LogWarning(msg);
+                else FreeHStudioSceneLoader.Logger.LogDebug(msg);
+            }
+            return null;
+        }
+        [HarmonyPrefix, HarmonyPatch(typeof(TreeNodeObject), nameof(TreeNodeObject.Select))]
+        private static bool TreeNodeObject_Select() => Off;
+        [HarmonyPrefix, HarmonyPatch(typeof(TreeNodeObject), nameof(TreeNodeObject.SetStateVisible))]
+        private static bool TreeNodeObject_SetStateVisible() => Off;
+        [HarmonyPrefix, HarmonyPatch(typeof(TreeNodeObject), nameof(TreeNodeObject.RecalcSelectButtonPos))]
+        private static bool TreeNodeObject_RecalcSelectButtonPos() => Off;
+
+        #endregion
+    }
+}
