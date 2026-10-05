@@ -195,12 +195,20 @@ namespace KKS_FreeHStudioSceneLoader
             return false;
         }
 
+        // The setters also show or hide the (missing) guide parts; only keep the flag, which decides whether the scale applies
         [HarmonyPrefix, HarmonyPatch(typeof(GuideObject), nameof(GuideObject.enablePos), MethodType.Setter)]
-        private static bool GuideObject_enablePos() => Off;
+        private static bool GuideObject_enablePos(GuideObject __instance, bool value) => SetEnable(__instance, 0, value);
         [HarmonyPrefix, HarmonyPatch(typeof(GuideObject), nameof(GuideObject.enableRot), MethodType.Setter)]
-        private static bool GuideObject_enableRot() => Off;
+        private static bool GuideObject_enableRot(GuideObject __instance, bool value) => SetEnable(__instance, 1, value);
         [HarmonyPrefix, HarmonyPatch(typeof(GuideObject), nameof(GuideObject.enableScale), MethodType.Setter)]
-        private static bool GuideObject_enableScale() => Off;
+        private static bool GuideObject_enableScale(GuideObject __instance, bool value) => SetEnable(__instance, 2, value);
+
+        private static bool SetEnable(GuideObject guide, int index, bool value)
+        {
+            if (Off) return true;
+            if (guide.m_Enables != null && index < guide.m_Enables.Length) guide.m_Enables[index] = value;
+            return false;
+        }
         [HarmonyPrefix, HarmonyPatch(typeof(GuideObject), nameof(GuideObject.SetMode))]
         private static bool GuideObject_SetMode() => Off;
         [HarmonyPrefix, HarmonyPatch(typeof(GuideObject), nameof(GuideObject.SetScale))]

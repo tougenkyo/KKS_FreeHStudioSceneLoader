@@ -68,6 +68,8 @@ KKSのゲーム側の処理（`[MODDING] Tools` の dnSpy.Console で逆コン�
 | 0.2.2 | （機能追加）スタジオの背景画像（`SceneInfo.background`、StudioImageEmbed の `BGData`）がHで出ない | Hのカメラに ScreenSpaceCamera のキャンバスを作り、一番奥に画像を表示する（スタジオの `BackgroundCtrl` と同じく画面いっぱい） |
 | 0.2.3 | マップの無いシーンで、隠したマップの空（スカイボックス）が見える。スタジオではマップが無いと黒 | 土台マップを隠すときに、カメラを単色（既定は黒、設定で変更可）で塗る。H終了時に戻す |
 | 0.2.4 | 0.2.3 でもHで空が見えた（スイートルームを土台にした場合）。Hのカメラ1台だけを塗っていた | `RenderSettings.skybox` を外し、画面を消去するカメラ（Skybox / SolidColor、RenderTexture 以外）をすべて単色にする。H終了時に戻す。カメラの一覧をデバッグログに出す |
+| 0.2.5 | アイテムの拡大縮小が反映されず、すべて等倍で置かれていた（シーン A の緑の壁 0.1×50×100 が小さな箱になる）。スタジオでは GuideObject.LateUpdate が毎フレーム大きさを設定するが、ここで作るガイドは非アクティブで LateUpdate が動かない（元のKK版も同じ） | 配置後に LateUpdate と同じ式で、親から順に1回だけ大きさを適用する。enablePos/Rot/Scale のセッターはフラグだけ保存する |
+| 0.2.5 | 柄（パターン）付きアイテムで `OCIItem.SetPatternTex` が NRE（`Studio.patternSelectListCtrl` が無い）。アイテムの読み込みが途中で止まる | 非アクティブなオブジェクトに PatternSelectListCtrl を置き、StudioScene.CreatePatternList と同じ項目（mt_pattern と UserData/pattern_thumb）を UI 無しで登録する |
 
 ### 未確認・既知の制限
 - 目に見えるアイテム（家具など）の位置・色・マテリアルの再現は、まだ確認していない

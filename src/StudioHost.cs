@@ -59,6 +59,9 @@ namespace KKS_FreeHStudioSceneLoader
                 cameraHolder.SetActive(false);
                 cameraHolder.transform.SetParent(_host.transform, false);
                 studio.m_CameraCtrl = cameraHolder.AddComponent<Studio.CameraControl>();
+                // OCIItem.SetPatternTex looks pattern IDs up in this list; its Start needs the Studio UI, so it stays inactive too
+                studio._patternSelectListCtrl = cameraHolder.AddComponent<PatternSelectListCtrl>();
+                FillPatternList(studio._patternSelectListCtrl);
 
                 var treeNodeRoot = new GameObject("TreeNodes");
                 treeNodeRoot.transform.SetParent(_host.transform, false);
@@ -107,6 +110,25 @@ namespace KKS_FreeHStudioSceneLoader
                 else yield return current;
             }
             FreeHStudioSceneLoader.Logger.LogInfo("Studio lists loaded");
+        }
+
+        /// <summary>Same entries as StudioScene.CreatePatternList, without creating the UI.</summary>
+        private static void FillPatternList(PatternSelectListCtrl list)
+        {
+            var infos = Manager.Character.chaListCtrl.GetCategoryInfo(ChaListDefine.CategoryNo.mt_pattern).Values.ToList();
+            foreach (var info in infos)
+                list.AddList(info.Id, info.Name, info.GetInfo(ChaListDefine.KeyType.ThumbAB), info.GetInfo(ChaListDefine.KeyType.ThumbTex));
+            // AddOutside would create the folder when it is missing
+            var thumbDir = UserData.Path + "pattern_thumb";
+            if (infos.Count > 0 && System.IO.Directory.Exists(thumbDir))
+            {
+                int index = infos.Max(i => i.Id) + 1;
+                foreach (var file in System.IO.Directory.GetFiles(thumbDir, "*.png"))
+                {
+                    var name = System.IO.Path.GetFileName(file);
+                    list.AddList(index++, System.IO.Path.GetFileNameWithoutExtension(name), "", name);
+                }
+            }
         }
 
         private static void Fail(string what, Exception ex)
@@ -353,7 +375,36 @@ namespace KKS_FreeHStudioSceneLoader
                     FreeHStudioSceneLoader.Logger.LogWarning($"Failed to load studio object (kind {info.kind}, key {info.dicKey}): {ex}");
                 }
             }
+            ApplyScales();
             FreeHStudioSceneLoader.Logger.LogInfo($"Studio scene objects placed: {loaded} (skipped {skipped} characters/cameras/routes/texts)");
+        }
+
+        /// <summary>
+        /// In Studio, GuideObject.LateUpdate sets each object's scale every frame (as a world scale, not inherited from
+        /// the parent). The guide objects here are created inactive, so do the same once, parents first.
+        /// </summary>
+        private static void ApplyScales()
+        {
+            int Depth(Transform t)
+            {
+                int d = 0;
+                for (; t != null; t = t.parent) d++;
+                return d;
+            }
+
+            var guides = Singleton<GuideObjectManager>.Instance.dicGuideObject.Values
+                .Where(g => g != null && g.transformTarget != null && g.calcScale)
+                .OrderBy(g => Depth(g.transformTarget))
+                .ToList();
+            foreach (var guide in guides)
+            {
+                var target = guide.transformTarget;
+                var local = target.localScale;
+                var lossy = target.lossyScale;
+                if (Mathf.Approximately(lossy.x, 0f) || Mathf.Approximately(lossy.y, 0f) || Mathf.Approximately(lossy.z, 0f)) continue;
+                var scale = guide.enableScale ? guide.changeAmount.scale : Vector3.one;
+                target.localScale = new Vector3(local.x / lossy.x * scale.x, local.y / lossy.y * scale.y, local.z / lossy.z * scale.z);
+            }
         }
 
         /// <summary>
