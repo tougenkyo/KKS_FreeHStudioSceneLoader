@@ -92,7 +92,7 @@ namespace KKS_FreeHStudioSceneLoader
             StudioHost.ShowBackground(camera);
             if (!noMap)
             {
-                StudioHost.LoadOverlay();
+                StudioHost.LoadOverlay(proc.map.mapRoot.transform);
                 yield break;
             }
 

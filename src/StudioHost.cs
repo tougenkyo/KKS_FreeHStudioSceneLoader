@@ -321,12 +321,17 @@ namespace KKS_FreeHStudioSceneLoader
         /// <summary>
         /// Places the scene's items, folders and lights relative to the H map. Call after the H map has been loaded.
         /// </summary>
-        internal static void LoadOverlay()
+        internal static void LoadOverlay(Transform hMapRoot)
         {
             if (_sceneInfo == null) return;
-            // Studio moves the map by caMap; in H the map stays at the origin, so move the objects the other way
+            // Studio puts the map root at caMap (MapCtrl.Reflect overwrites the root's own position, e.g. (-50, 0, -115)
+            // for the suite room). In H the root stays where the map scene has it, so map the objects from the studio
+            // root to the H root.
             var inv = Quaternion.Inverse(Quaternion.Euler(_sceneInfo.caMap.rot));
-            LoadOverlay(inv * -_sceneInfo.caMap.pos, inv);
+            var rootRot = hMapRoot.rotation * inv;
+            var rootPos = hMapRoot.position + hMapRoot.rotation * (inv * -_sceneInfo.caMap.pos);
+            FreeHStudioSceneLoader.Logger.LogInfo($"Map root in H at {hMapRoot.position}, studio map position {_sceneInfo.caMap.pos}");
+            LoadOverlay(rootPos, rootRot);
         }
 
         /// <summary>
