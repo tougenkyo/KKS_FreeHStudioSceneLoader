@@ -146,13 +146,94 @@ namespace KKS_FreeHStudioSceneLoader
                 IsLoadingScene = false;
             }
             _sceneInfo = sceneInfo;
+            _backgroundPng = ReadBackgroundImage(sceneInfo);
             studioMapNo = sceneInfo.map;
             return true;
+        }
+
+        /// <summary>
+        /// The studio background image (a picture drawn behind everything, see Studio.BackgroundCtrl). StudioImageEmbed
+        /// keeps it in the scene's extended data; without it the scene refers to a file under UserData/bg.
+        /// The extended data of a scene is only available right after reading it.
+        /// </summary>
+        private static byte[] ReadBackgroundImage(SceneInfo sceneInfo)
+        {
+            try
+            {
+                var embed = ExtensibleSaveFormat.ExtendedSave.GetSceneExtendedDataById(ImageEmbedGUID);
+                if (embed?.data != null && embed.data.TryGetValue("BGData", out var bg) && bg is byte[] bytes && bytes.Length > 0)
+                    return bytes;
+                if (!string.IsNullOrEmpty(sceneInfo.background))
+                {
+                    var path = System.IO.Path.Combine(BepInEx.Paths.GameRootPath, sceneInfo.background);
+                    if (System.IO.File.Exists(path)) return System.IO.File.ReadAllBytes(path);
+                    FreeHStudioSceneLoader.Logger.LogInfo($"Background image of the scene not found: {sceneInfo.background}");
+                }
+            }
+            catch (Exception ex)
+            {
+                FreeHStudioSceneLoader.Logger.LogWarning($"Could not read the background image of the scene: {ex.Message}");
+            }
+            return null;
+        }
+
+        private const string ImageEmbedGUID = "com.deathweasel.bepinex.studioimageembed";
+        private static byte[] _backgroundPng;
+        private static GameObject _backgroundCanvas;
+        private static Texture2D _backgroundTexture;
+
+        /// <summary>
+        /// Shows the studio background image behind everything, filling the view like Studio does
+        /// (a camera-space canvas at the far end of the view, so the scene and characters stay in front of it).
+        /// </summary>
+        internal static void ShowBackground(Camera camera)
+        {
+            if (_backgroundPng == null || camera == null || !FreeHStudioSceneLoader.ShowBackgroundImage.Value) return;
+            int w = 0, h = 0;
+            _backgroundTexture = PngAssist.ChangeTextureFromPngByte(_backgroundPng, ref w, ref h);
+            if (_backgroundTexture == null) return;
+
+            _backgroundCanvas = new GameObject("FreeHStudioSceneLoader_Background");
+            _backgroundCanvas.layer = FirstRenderedLayer(camera);
+            var canvas = _backgroundCanvas.AddComponent<Canvas>();
+            canvas.renderMode = RenderMode.ScreenSpaceCamera;
+            canvas.worldCamera = camera;
+            canvas.planeDistance = camera.farClipPlane * 0.98f;
+            canvas.sortingOrder = -1000;
+
+            var image = new GameObject("Image");
+            image.layer = _backgroundCanvas.layer;
+            image.transform.SetParent(_backgroundCanvas.transform, false);
+            var raw = image.AddComponent<UnityEngine.UI.RawImage>();
+            raw.texture = _backgroundTexture;
+            raw.raycastTarget = false;
+            var rt = raw.rectTransform;
+            rt.anchorMin = Vector2.zero;
+            rt.anchorMax = Vector2.one;
+            rt.offsetMin = Vector2.zero;
+            rt.offsetMax = Vector2.zero;
+            FreeHStudioSceneLoader.Logger.LogInfo($"Studio background image shown ({w}x{h})");
+        }
+
+        private static int FirstRenderedLayer(Camera camera)
+        {
+            for (int i = 0; i < 32; i++)
+                if ((camera.cullingMask & (1 << i)) != 0) return i;
+            return 0;
+        }
+
+        private static void HideBackground()
+        {
+            if (_backgroundCanvas != null) UnityEngine.Object.Destroy(_backgroundCanvas);
+            if (_backgroundTexture != null) UnityEngine.Object.Destroy(_backgroundTexture);
+            _backgroundCanvas = null;
+            _backgroundTexture = null;
         }
 
         internal static void DiscardSceneData()
         {
             _sceneInfo = null;
+            _backgroundPng = null;
             if (!Created) return;
             try { Singleton<Studio.Studio>.Instance.sceneInfo = new SceneInfo(); }
             catch (Exception ex) { FreeHStudioSceneLoader.Logger.LogWarning($"Could not reset the studio scene info: {ex.Message}"); }
@@ -170,7 +251,7 @@ namespace KKS_FreeHStudioSceneLoader
             approximate = false;
             if (studioMapNo < 0)
             {
-                reason = "このシーンにはスタジオのマップがありません（アイテムで背景を作ったシーン）。まだ対応していません。";
+                reason = "このシーンにはスタジオのマップがありません。";
                 return null;
             }
             if (!Singleton<Info>.Instance.dicMapLoadInfo.TryGetValue(studioMapNo, out var mapLoadInfo))
@@ -216,20 +297,37 @@ namespace KKS_FreeHStudioSceneLoader
         }
 
         /// <summary>
-        /// Places the scene's items, folders and lights. Call after the H map has been loaded.
+        /// Places the scene's items, folders and lights relative to the H map. Call after the H map has been loaded.
         /// </summary>
         internal static void LoadOverlay()
         {
             if (_sceneInfo == null) return;
+            // Studio moves the map by caMap; in H the map stays at the origin, so move the objects the other way
+            var inv = Quaternion.Inverse(Quaternion.Euler(_sceneInfo.caMap.rot));
+            LoadOverlay(inv * -_sceneInfo.caMap.pos, inv);
+        }
+
+        /// <summary>
+        /// Places the objects of a scene that has no studio map, so that the scene's (first female) character
+        /// stands where the H scene starts. Only the yaw of the character is used, so the scene stays upright.
+        /// </summary>
+        internal static void LoadOverlayAt(Vector3 startPos, Quaternion startRot)
+        {
+            if (_sceneInfo == null) return;
+            FindAnchor(out var anchorPos, out var anchorYaw, out var anchorName);
+            var rot = startRot * Quaternion.Inverse(Quaternion.Euler(0f, anchorYaw, 0f));
+            FreeHStudioSceneLoader.Logger.LogInfo($"Scene without a map: aligning {anchorName} at {anchorPos} to the H start position {startPos}");
+            LoadOverlay(startPos - rot * anchorPos, rot);
+        }
+
+        private static void LoadOverlay(Vector3 rootPos, Quaternion rootRot)
+        {
             var studio = Singleton<Studio.Studio>.Instance;
             studio.sceneInfo = _sceneInfo;
 
-            // Studio moves the map by caMap; in H the map stays at the origin, so move the objects the other way
             _overlayRoot = new GameObject("FreeHStudioSceneLoader_Objects");
-            var mapRot = Quaternion.Euler(_sceneInfo.caMap.rot);
-            var inv = Quaternion.Inverse(mapRot);
-            _overlayRoot.transform.rotation = inv;
-            _overlayRoot.transform.position = inv * -_sceneInfo.caMap.pos;
+            _overlayRoot.transform.rotation = rootRot;
+            _overlayRoot.transform.position = rootPos;
 
             int loaded = 0, skipped = 0;
             foreach (var info in _sceneInfo.dicObject.Values.ToList())
@@ -239,6 +337,8 @@ namespace KKS_FreeHStudioSceneLoader
                     skipped++;
                     continue;
                 }
+                // Folders and items load their children too; characters inside them would fail and abort the folder
+                skipped += RemoveSkippedChildren(info);
                 try
                 {
                     var oci = AddObjectAssist.LoadChild(info);
@@ -254,6 +354,129 @@ namespace KKS_FreeHStudioSceneLoader
                 }
             }
             FreeHStudioSceneLoader.Logger.LogInfo($"Studio scene objects placed: {loaded} (skipped {skipped} characters/cameras/routes/texts)");
+        }
+
+        /// <summary>
+        /// The scene position of the first female character (or any character, or the origin), following the
+        /// folders and items it is placed under.
+        /// </summary>
+        private static void FindAnchor(out Vector3 pos, out float yaw, out string name)
+        {
+            OICharInfo found = null;
+            var foundMatrix = Matrix4x4.identity;
+
+            void Visit(IEnumerable<ObjectInfo> infos, Matrix4x4 parent)
+            {
+                foreach (var info in infos)
+                {
+                    if (info == null) continue;
+                    var ca = info.changeAmount;
+                    var m = parent * Matrix4x4.TRS(ca.pos, Quaternion.Euler(ca.rot), ca.scale);
+                    if (info is OICharInfo chara)
+                    {
+                        if (found == null || (found.sex != 1 && chara.sex == 1))
+                        {
+                            found = chara;
+                            foundMatrix = m;
+                        }
+                    }
+                    else if (info is OIFolderInfo folder) Visit(folder.child, m);
+                    else if (info is OIItemInfo item) Visit(item.child, m);
+                }
+            }
+            Visit(_sceneInfo.dicObject.Values, Matrix4x4.identity);
+
+            if (found == null)
+            {
+                pos = Vector3.zero;
+                yaw = 0f;
+                name = "the scene origin (no characters)";
+                return;
+            }
+            pos = foundMatrix.MultiplyPoint3x4(Vector3.zero);
+            var forward = foundMatrix.MultiplyVector(Vector3.forward);
+            yaw = Mathf.Atan2(forward.x, forward.z) * Mathf.Rad2Deg;
+            name = found.sex == 1 ? "the female character" : "the character";
+        }
+
+        private static readonly List<Renderer> _hiddenRenderers = new List<Renderer>();
+
+        /// <summary>Hides the base map's visuals; its H points and colliders keep working.</summary>
+        internal static void HideMap(GameObject mapRoot)
+        {
+            if (mapRoot == null) return;
+            foreach (var r in mapRoot.GetComponentsInChildren<Renderer>(true))
+            {
+                if (!r.enabled) continue;
+                r.enabled = false;
+                _hiddenRenderers.Add(r);
+            }
+            FreeHStudioSceneLoader.Logger.LogInfo($"Base map hidden ({_hiddenRenderers.Count} renderers)");
+        }
+
+        private struct CameraState
+        {
+            public Camera Camera;
+            public CameraClearFlags ClearFlags;
+            public Color BackgroundColor;
+        }
+
+        private static readonly List<CameraState> _paintedCameras = new List<CameraState>();
+        private static Material _oldSkybox;
+        private static bool _skyboxRemoved;
+
+        /// <summary>
+        /// Studio's camera clears to a solid color; with no map nothing else is drawn there. Do the same instead of
+        /// showing the sky of the hidden map: remove the skybox and paint every camera that clears the screen.
+        /// </summary>
+        internal static void PaintCameraBackground(Camera hCamera)
+        {
+            var color = FreeHStudioSceneLoader.NoMapBackgroundColor.Value;
+            if (!_skyboxRemoved)
+            {
+                _oldSkybox = RenderSettings.skybox;
+                RenderSettings.skybox = null;
+                _skyboxRemoved = true;
+            }
+            foreach (var camera in Camera.allCameras)
+            {
+                FreeHStudioSceneLoader.Logger.LogDebug($"Camera {camera.name}: depth {camera.depth}, clear {camera.clearFlags}, main {camera == Camera.main}, H {camera == hCamera}");
+                if (camera.clearFlags != CameraClearFlags.Skybox && camera.clearFlags != CameraClearFlags.SolidColor) continue;
+                if (camera.targetTexture != null) continue;
+                _paintedCameras.Add(new CameraState { Camera = camera, ClearFlags = camera.clearFlags, BackgroundColor = camera.backgroundColor });
+                camera.clearFlags = CameraClearFlags.SolidColor;
+                camera.backgroundColor = color;
+            }
+            FreeHStudioSceneLoader.Logger.LogInfo($"Sky removed, {_paintedCameras.Count} camera(s) painted");
+        }
+
+        private static void RestoreMap()
+        {
+            foreach (var r in _hiddenRenderers) if (r != null) r.enabled = true;
+            _hiddenRenderers.Clear();
+            foreach (var state in _paintedCameras)
+            {
+                if (state.Camera == null) continue;
+                state.Camera.clearFlags = state.ClearFlags;
+                state.Camera.backgroundColor = state.BackgroundColor;
+            }
+            _paintedCameras.Clear();
+            if (_skyboxRemoved) RenderSettings.skybox = _oldSkybox;
+            _skyboxRemoved = false;
+            _oldSkybox = null;
+        }
+
+        /// <summary>Removes the objects that are not placed from the children of a folder or item, recursively.</summary>
+        private static int RemoveSkippedChildren(ObjectInfo info)
+        {
+            List<ObjectInfo> children;
+            if (info is OIFolderInfo folder) children = folder.child;
+            else if (info is OIItemInfo item) children = item.child;
+            else return 0;
+            int removed = children.RemoveAll(c => c == null || !ShouldLoad(c));
+            foreach (var child in children)
+                removed += RemoveSkippedChildren(child);
+            return removed;
         }
 
         private static bool ShouldLoad(ObjectInfo info)
@@ -272,6 +495,8 @@ namespace KKS_FreeHStudioSceneLoader
         /// </summary>
         internal static void UnloadOverlay()
         {
+            RestoreMap();
+            HideBackground();
             if (!Created) return;
             var studio = Singleton<Studio.Studio>.Instance;
             foreach (var oci in studio.dicObjectCtrl.Values.ToList())

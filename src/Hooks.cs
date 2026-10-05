@@ -36,9 +36,15 @@ namespace KKS_FreeHStudioSceneLoader
             if (!Selection.IsSelected || _mapInfo == null) return;
             if (_mapInfo.No != Selection.MapNo)
             {
-                // Another map was chosen in the normal map selection
-                Selection.Clear();
-                return;
+                // Another map was chosen in the normal map selection. A scene without a map keeps the scene
+                // and uses the new map for the H positions; otherwise the scene no longer fits.
+                if (Selection.NoMap && _mapInfo.isFreeH)
+                    Selection.ChangeBaseMap(_mapInfo);
+                else
+                {
+                    Selection.Clear();
+                    return;
+                }
             }
             ApplySceneThumbnail(__instance);
         }
@@ -50,6 +56,7 @@ namespace KKS_FreeHStudioSceneLoader
             try { sprite = PngAssist.LoadSpriteFromFile(Selection.ScenePath); }
             catch { return; }
             var name = "[Studio] " + Path.GetFileNameWithoutExtension(Selection.ScenePath);
+            if (Selection.NoMap) name += $"（H位置: {Selection.BaseMapName}）";
             foreach (var img in new[] { freeH.mapImageNormal, freeH.mapImageMasturbation, freeH.mapImageLesbian, freeH.mapImage3P })
                 if (img != null) img.sprite = sprite;
             foreach (var txt in new[] { freeH.mapNameNormal, freeH.mapNameMasturbation, freeH.mapNameLesbian, freeH.mapName3P })
@@ -60,10 +67,10 @@ namespace KKS_FreeHStudioSceneLoader
         private static void HSceneProc_Start(HSceneProc __instance)
         {
             if (!Selection.IsSelected || !StudioHost.HasSceneData) return;
-            FreeHStudioSceneLoader.Instance.StartCoroutine(LoadOverlayWhenMapReady(__instance, Selection.MapNo));
+            FreeHStudioSceneLoader.Instance.StartCoroutine(LoadOverlayWhenMapReady(__instance, Selection.MapNo, Selection.NoMap));
         }
 
-        private static IEnumerator LoadOverlayWhenMapReady(HSceneProc proc, int mapNo)
+        private static IEnumerator LoadOverlayWhenMapReady(HSceneProc proc, int mapNo, bool noMap)
         {
             float timeout = Time.realtimeSinceStartup + 120f;
             while (proc != null && Time.realtimeSinceStartup < timeout)
@@ -81,7 +88,28 @@ namespace KKS_FreeHStudioSceneLoader
             if (!proc.flags.isFreeH)
                 yield break;
             yield return null;
-            StudioHost.LoadOverlay();
+            var camera = proc.flags.ctrlCamera != null ? proc.flags.ctrlCamera.thisCmaera : Camera.main;
+            StudioHost.ShowBackground(camera);
+            if (!noMap)
+            {
+                StudioHost.LoadOverlay();
+                yield break;
+            }
+
+            // The H start position (initPos/initRot) is final once the characters start to be created
+            while (proc != null && proc.lstFemale.Count == 0 && Time.realtimeSinceStartup < timeout)
+                yield return null;
+            if (proc == null || proc.lstFemale.Count == 0)
+            {
+                FreeHStudioSceneLoader.Logger.LogWarning("H characters were not created in time, studio objects not placed");
+                yield break;
+            }
+            if (FreeHStudioSceneLoader.HideBaseMap.Value)
+            {
+                StudioHost.HideMap(proc.map.mapRoot);
+                StudioHost.PaintCameraBackground(camera);
+            }
+            StudioHost.LoadOverlayAt(proc.initPos, proc.initRot);
         }
 
         [HarmonyPrefix, HarmonyPatch(typeof(HSceneProc), nameof(HSceneProc.OnDestroy))]

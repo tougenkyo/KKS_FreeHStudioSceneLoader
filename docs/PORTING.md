@@ -34,10 +34,16 @@ KKSのゲーム側の処理（`[MODDING] Tools` の dnSpy.Console で逆コン�
 - **シーンの読み込み**：Sideloader は `SceneInfo.Load` の途中（ExtendedSave のイベント）で、`Studio.Instance.sceneInfo` を参照してMODアイテムやマップのIDを変換する。そのため、読み込む前に `Studio.Instance.sceneInfo` に読み込み先を設定する。
 - **配置するもの**：アイテム（kind 1）、ライト（kind 2、設定で切り替え）、フォルダ（kind 3）。キャラクター、ルート、カメラ、テキストは配置しない。スタジオでマップを移動していた場合（`caMap`）は、その逆の変換をアイテム側にかける。
 - **ゲームの処理を書き写して置き換えるパッチは最小限に**：元のパッチのうち、ハンドル（GuideObject）とツリー（TreeNode）の画面まわりを無効化するものだけを残した。KKS版の処理と比較し、`GuideObject.Awake` / `LateUpdate`、`GuideObjectManager.DeleteAll`、`TreeNodeCtrl.AddNode` は KKS 版の処理に合わせて書いている。`Studio.LoadScene` / `InitScene` / `Init` は呼ばないので、置き換えもしない。
-- **マップ選択画面には手を入れない**：Free-H画面で F7 キーを押すと、独自のシーン選択ウィンドウ（IMGUI）が開く。
+- **マップ選択画面には手を入れない**：Free-H画面のボタン（IMGUI、位置は設定で変更可）か F7 キーで、独自のシーン選択ウィンドウ（IMGUI）が開く。
+
+## v0.2 土台マップを持たないシーン（2026-10-05）
+アイテムだけで背景を作ったシーン（`SceneInfo.map == -1`）。元のKK版も対応していない。
+- **H位置はFree-H画面で選んでいるマップから借りる**：シーンを選んだ時点の `resultMapInfo` をそのまま使う。選んだ後に通常のマップ選択で別のマップを選ぶと、シーンは解除せず、H位置に使うマップだけを切り替える。
+- **シーンの置き場所**：シーン内の最初の女性キャラ（いなければ最初のキャラ、キャラがいなければ原点）の位置と向き（Y軸回転のみ）を、Hの開始位置 `HSceneProc.initPos` / `initRot` に合わせる。キャラの位置は、親のフォルダ・アイテムの `changeAmount` をたどって求める。`initPos` は `CreateCharacter` の前に確定するので、`lstFemale` に要素が入るのを待ってから読む。
+- **土台マップは表示しない**（設定で切り替え）：`mapRoot` 以下の Renderer を無効にする。コライダーとHポイントはそのまま。H終了時に元に戻す。
+- 制限：Hポイントを移動すると、キャラだけが借りたマップの別の位置に移動し、背景はその場に残る。
 
 ## 未対応（今後）
-- 土台マップを持たないシーン（アイテムだけで背景を作ったもの）
 - キャラクターの読み込み
 - MaterialEditor などで変更したアイテムのマテリアル（KKAPI のスタジオ用の読み込み処理が、メインゲームでは動かないため）
 
@@ -58,6 +64,10 @@ KKSのゲーム側の処理（`[MODDING] Tools` の dnSpy.Console で逆コン�
 | 0.1.8 | `SetVisibleChild` などのパッチを移植し忘れていた。スタジオの音声アイテムが読み込み時に鳴った | パッチを追加した。`SEComponent.OnEnable` を止めた（設定で再生できるようにした） |
 | 0.1.9 | Hシーンから選択画面に戻ると `SceneInfo.Init` でNRE。`DeleteAllNode` がホストの子（CameraControl の入れ物）まで消していた | ツリーノード専用の入れ物 `TreeNodes` を作り、その子だけを消すようにした |
 | 0.1.10 | KK形式のシーンで、キャラクターの後のデータを読むところで `EndOfStreamException`。メインゲームの `ChaFile.LoadFile(BinaryReader)` は、カードの目印が `【KoiKatuCharaSun】` でないと途中で読むのをやめる。スタジオ版は目印を確認しない（2つの Assembly-CSharp を比べた違いはこの1か所と、衣装の数の扱いだけ） | Transpiler で目印の比較を差し替えた。シーンを読んでいる間だけ、KKの目印（`ChaFileDefine.KoikatsuCharaFileMarkCheck`）も通す |
+| 0.2.1 | フォルダの中のキャラクターまで読み込もうとして `AddObjectFemale.Add` でNRE。フォルダごと失敗し、中のアイテムも置かれなかった | 配置する前に、フォルダ・アイテムの子から、配置しない種類（キャラ・ルート・カメラ・テキスト）を再帰的に取り除く |
+| 0.2.2 | （機能追加）スタジオの背景画像（`SceneInfo.background`、StudioImageEmbed の `BGData`）がHで出ない | Hのカメラに ScreenSpaceCamera のキャンバスを作り、一番奥に画像を表示する（スタジオの `BackgroundCtrl` と同じく画面いっぱい） |
+| 0.2.3 | マップの無いシーンで、隠したマップの空（スカイボックス）が見える。スタジオではマップが無いと黒 | 土台マップを隠すときに、カメラを単色（既定は黒、設定で変更可）で塗る。H終了時に戻す |
+| 0.2.4 | 0.2.3 でもHで空が見えた（スイートルームを土台にした場合）。Hのカメラ1台だけを塗っていた | `RenderSettings.skybox` を外し、画面を消去するカメラ（Skybox / SolidColor、RenderTexture 以外）をすべて単色にする。H終了時に戻す。カメラの一覧をデバッグログに出す |
 
 ### 未確認・既知の制限
 - 目に見えるアイテム（家具など）の位置・色・マテリアルの再現は、まだ確認していない

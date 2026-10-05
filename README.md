@@ -21,11 +21,13 @@ dotnet build -c Release
 Output: `bin/Release/KKS_FreeHStudioSceneLoader.dll` → copy to `BepInEx/plugins/`.
 
 ## Usage
-1. Open Free H, press **F7** on the selection screen (configurable).
+1. Open Free H, click the 「スタジオシーンを選ぶ」 button or press **F7** on the selection screen (both configurable).
 2. Wait for the studio lists to load (first time only), pick a scene from `UserData/studio/scene`, click 「このシーンを使う」.
 3. The Free H map is switched to the scene's base map; start H as usual. Items, folders and lights from the scene are placed on the map. Characters are not loaded.
 
-Scenes whose map has no Free H version, and scenes without a studio map, are not supported yet.
+Scenes without a studio map (backgrounds built from items): the map currently chosen in Free H provides the H positions and is hidden; the scene is placed so that its female character stands at the H start position. Choose the Free H map before picking the scene, or change it afterwards in the normal map selection.
+
+Scenes whose map has no Free H version are not supported yet.
 
 ## Requirements (runtime)
 - Koikatsu Sunshine with BepInEx 5, KKAPI, Sideloader
