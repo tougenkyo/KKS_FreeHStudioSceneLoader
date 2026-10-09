@@ -141,6 +141,8 @@ namespace KKS_FreeHStudioSceneLoader
         private static void HSceneProc_OnDestroy()
         {
             if (Off) return;
+            // Set the scene again when the Free H screen comes back
+            if (Selection.IsSelected) Selection.ReturnScenePath = Selection.ScenePath;
             StudioHost.UnloadOverlay();
             Selection.Clear();
         }

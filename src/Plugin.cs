@@ -21,7 +21,7 @@ namespace KKS_FreeHStudioSceneLoader
     {
         public const string GUID = "local.kks.freehstudiosceneloader";
         public const string PluginName = "Free H Studio Scene Loader (KKS port, experimental)";
-        public const string Version = "0.4.2";
+        public const string Version = "0.4.3";
 
         internal static new ManualLogSource Logger;
         internal static FreeHStudioSceneLoader Instance;
@@ -199,7 +199,10 @@ namespace KKS_FreeHStudioSceneLoader
             {
                 _files = null;
                 StudioHost.EnsureCreated();
+                // Show the scene whose details are loaded; a preview left from before (its data was discarded when the
+                // Free H screen restarted) would keep 「このシーンを使う」 disabled
                 if (Selection.PreviewPath != null && _previewPath != Selection.PreviewPath) SetPreview(Selection.PreviewPath);
+                else if (Selection.PreviewPath == null && _previewPath != null) ClearPreview();
             }
         }
 
@@ -207,7 +210,43 @@ namespace KKS_FreeHStudioSceneLoader
         {
             _freeH = freeH;
             Selection.Clear();
-            Logger.LogMessage($"スタジオシーン読み込み: ボタンか {WindowKey.Value} キーでシーンを選べます");
+            ClearPreview();
+            _status = "";
+            var path = Selection.ReturnScenePath;
+            Selection.ReturnScenePath = null;
+            if (path != null && File.Exists(path))
+                StartCoroutine(SetSceneAgain(freeH, path));
+            else
+                Logger.LogMessage($"スタジオシーン読み込み: ボタンか {WindowKey.Value} キーでシーンを選べます");
+        }
+
+        /// <summary>
+        /// Back from H: sets the scene that was used again. FreeHScene.Start is a coroutine that ends by choosing the
+        /// map of the H scene, so wait until it has done that.
+        /// </summary>
+        private System.Collections.IEnumerator SetSceneAgain(FreeHScene freeH, string path)
+        {
+            float timeout = Time.realtimeSinceStartup + 60f;
+            while (freeH != null && Time.realtimeSinceStartup < timeout &&
+                   (freeH.member?.resultMapInfo == null || freeH.member.resultMapInfo.Value == null || !StudioHost.IsReady))
+                yield return null;
+            yield return new WaitForSeconds(0.5f);
+            if (freeH == null || freeH != _freeH || Selection.IsSelected || freeH.member?.resultMapInfo?.Value == null)
+                yield break;
+            try
+            {
+                SetPreview(path);
+                _status = Selection.Preview(freeH, path) ?? "";
+                if (Selection.PreviewPath == path)
+                    _status = Selection.Use(freeH);
+                Logger.LogMessage(Selection.IsSelected
+                    ? $"スタジオシーン「{Path.GetFileNameWithoutExtension(path)}」をもう一度セットしました（{WindowKey.Value} キーで変更できます）"
+                    : $"スタジオシーン「{Path.GetFileNameWithoutExtension(path)}」をもう一度セットできませんでした: {_status}");
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning($"Could not set the studio scene again: {ex}");
+            }
         }
 
         private GUIStyle _buttonStyle;
@@ -536,6 +575,13 @@ namespace KKS_FreeHStudioSceneLoader
             if (_pendingIndex >= _pending.Length) _pending = null;
         }
 
+        private void ClearPreview()
+        {
+            _previewPath = null;
+            if (_preview != null) Destroy(_preview);
+            _preview = null;
+        }
+
         private void SetPreview(string path)
         {
             _previewPath = path;
@@ -695,6 +741,9 @@ namespace KKS_FreeHStudioSceneLoader
         /// <summary>The scene has no studio map: the chosen Free H map only provides the H positions.</summary>
         internal static bool NoMap { get; private set; }
         internal static string BaseMapName { get; private set; }
+
+        /// <summary>The scene that was set when H ended, to set again when the Free H screen comes back.</summary>
+        internal static string ReturnScenePath { get; set; }
 
         /// <summary>The scene whose data is loaded and shown in the window (not necessarily set for H).</summary>
         internal static string PreviewPath { get; private set; }
