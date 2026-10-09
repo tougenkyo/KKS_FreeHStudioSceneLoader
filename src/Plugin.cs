@@ -21,7 +21,7 @@ namespace KKS_FreeHStudioSceneLoader
     {
         public const string GUID = "local.kks.freehstudiosceneloader";
         public const string PluginName = "Free H Studio Scene Loader (KKS port, experimental)";
-        public const string Version = "0.4.3";
+        public const string Version = "0.4.4";
 
         internal static new ManualLogSource Logger;
         internal static FreeHStudioSceneLoader Instance;
@@ -182,7 +182,7 @@ namespace KKS_FreeHStudioSceneLoader
             {
                 _showWindow = false;
                 // During H the same key opens the window for the scene's characters
-                if (!StudioHost.HasPlacedCharacters) _showCharaWindow = false;
+                if (!StudioHost.HasPlacedScene) _showCharaWindow = false;
                 else if (WindowKey.Value.IsDown()) _showCharaWindow = !_showCharaWindow;
                 return;
             }
@@ -266,7 +266,7 @@ namespace KKS_FreeHStudioSceneLoader
         {
             if (_freeH == null)
             {
-                if (!StudioHost.HasPlacedCharacters) return;
+                if (!StudioHost.HasPlacedScene) return;
                 if (ShowButtonInH.Value)
                 {
                     var label = _showCharaWindow ? $"スタジオシーンのキャラクターを閉じる ({WindowKey.Value})" : $"スタジオシーンのキャラクター ({WindowKey.Value})";
@@ -636,16 +636,23 @@ namespace KKS_FreeHStudioSceneLoader
             }
             GUILayout.EndScrollView();
 
-            if (_selectedChara != null)
             {
-                GUILayout.BeginHorizontal();
-                GUILayout.Label("動かす対象", GUILayout.Width(70));
-                _moveMode = GUILayout.Toolbar(_moveMode, MoveModeNames);
-                GUILayout.EndHorizontal();
-                if (_moveMode != 2) _moveAll = GUILayout.Toggle(_moveAll, "全員まとめて動かす（キャラ同士の位置関係を保つ）");
-                var targets = _moveAll ? placed : new List<StudioHost.SceneCharacter> { _selectedChara };
-                var who = _moveAll ? "全員" : _selectedChara.Name;
-                switch (_moveMode)
+                // A scene without characters (or with all of them turned off) can still be moved as a whole
+                bool noChara = _selectedChara == null;
+                int moveMode = noChara ? 2 : _moveMode;
+                if (noChara)
+                    GUILayout.Label("このシーンにはキャラクターがいません。シーン全体を動かせます。");
+                else
+                {
+                    GUILayout.BeginHorizontal();
+                    GUILayout.Label("動かす対象", GUILayout.Width(70));
+                    _moveMode = moveMode = GUILayout.Toolbar(_moveMode, MoveModeNames);
+                    GUILayout.EndHorizontal();
+                    if (moveMode != 2) _moveAll = GUILayout.Toggle(_moveAll, "全員まとめて動かす（キャラ同士の位置関係を保つ）");
+                }
+                var targets = noChara ? placed : _moveAll ? placed : new List<StudioHost.SceneCharacter> { _selectedChara };
+                var who = noChara ? "" : _moveAll ? "全員" : _selectedChara.Name;
+                switch (moveMode)
                 {
                     case 0:
                         GUILayout.Label($"動かすキャラクター: {who}（回転は選んだキャラクターが中心）");
@@ -654,13 +661,15 @@ namespace KKS_FreeHStudioSceneLoader
                         GUILayout.Label($"動かすもの: {who}と、連結（NodesConstraints）でつながったフォルダ・アイテム {StudioHost.GetLinkedObjects(targets).Count} 個");
                         break;
                     default:
-                        GUILayout.Label("動かすもの: スタジオから置いたもの全部（キャラ・フォルダ・アイテム。回転は選んだキャラクターが中心）");
+                        GUILayout.Label(noChara
+                            ? "動かすもの: スタジオから置いたもの全部（フォルダ・アイテム。回転はシーンの原点が中心）"
+                            : "動かすもの: スタジオから置いたもの全部（キャラ・フォルダ・アイテム。回転は選んだキャラクターが中心）");
                         break;
                 }
                 void move(Vector3 delta)
                 {
-                    if (_moveMode == 0) StudioHost.Move(targets, delta);
-                    else if (_moveMode == 1) StudioHost.MoveLinked(targets, delta);
+                    if (moveMode == 0) StudioHost.Move(targets, delta);
+                    else if (moveMode == 1) StudioHost.MoveLinked(targets, delta);
                     else StudioHost.MoveScene(delta);
                 }
 
@@ -687,11 +696,11 @@ namespace KKS_FreeHStudioSceneLoader
                 GUILayout.Label("回転量", GUILayout.Width(50));
                 _turnStep = GUILayout.Toolbar(_turnStep, TurnStepNames);
                 GUILayout.EndHorizontal();
-                var pivot = StudioHost.GetPosition(_selectedChara);
+                var pivot = noChara ? StudioHost.SceneOrigin : StudioHost.GetPosition(_selectedChara);
                 void turn(float degrees)
                 {
-                    if (_moveMode == 0) StudioHost.Rotate(targets, pivot, degrees);
-                    else if (_moveMode == 1) StudioHost.RotateLinked(targets, pivot, degrees);
+                    if (moveMode == 0) StudioHost.Rotate(targets, pivot, degrees);
+                    else if (moveMode == 1) StudioHost.RotateLinked(targets, pivot, degrees);
                     else StudioHost.RotateScene(pivot, degrees);
                 }
                 GUILayout.BeginHorizontal();
@@ -707,8 +716,8 @@ namespace KKS_FreeHStudioSceneLoader
                 }
                 if (GUILayout.Button("元の位置に戻す"))
                 {
-                    if (_moveMode == 0) StudioHost.ResetPose(targets);
-                    else if (_moveMode == 1) StudioHost.ResetLinked(targets);
+                    if (moveMode == 0) StudioHost.ResetPose(targets);
+                    else if (moveMode == 1) StudioHost.ResetLinked(targets);
                     else StudioHost.ResetScene();
                 }
                 GUILayout.EndHorizontal();

@@ -55,6 +55,10 @@ namespace KKS_FreeHStudioSceneLoader
         internal static IList<SceneCharacter> SceneCharacters => _sceneCharacters;
 
         internal static bool HasPlacedCharacters => _sceneCharacters.Any(c => c.Placed);
+        /// <summary>The scene is placed in the current H scene (with or without characters).</summary>
+        internal static bool HasPlacedScene => _overlayRoot != null;
+        /// <summary>Where the scene's origin is now (the pivot to turn a scene without characters around).</summary>
+        internal static Vector3 SceneOrigin => _overlayRoot != null ? _overlayRoot.transform.position : Vector3.zero;
 
         private static bool IsCharacterEnabled(OICharInfo info)
         {
