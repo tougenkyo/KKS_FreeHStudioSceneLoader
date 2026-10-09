@@ -41,6 +41,8 @@ namespace KKS_FreeHStudioSceneLoader
             public OCIChar Oci;
             /// <summary>The scene's own card of a placed character, saved before it was first replaced (to go back to).</summary>
             public string OriginalCardFile;
+            /// <summary>The state of each clothing part as the scene had it when the character was placed.</summary>
+            public byte[] OriginalClothesState;
             public Vector3 OriginalPos;
             public Vector3 OriginalRot;
             /// <summary>PVCopy's switches in the last frame, and its hand/foot bones with their positions before it ever ran.</summary>
@@ -663,6 +665,7 @@ namespace KKS_FreeHStudioSceneLoader
                     if (entry != null)
                     {
                         entry.Oci = oci;
+                        entry.OriginalClothesState = (byte[])oci.charInfo.fileStatus.clothesState.Clone();
                         ApplyOutfit(entry);
                         entry.OriginalPos = info.changeAmount.pos;
                         entry.OriginalRot = info.changeAmount.rot;
@@ -1045,7 +1048,33 @@ namespace KKS_FreeHStudioSceneLoader
         internal static bool HasOutfit(SceneCharacter chara)
         {
             var o = OutfitOf(chara);
-            return o != null && (o.Type >= 0 || !string.IsNullOrEmpty(o.Card));
+            return o != null && (o.Type >= 0 || !string.IsNullOrEmpty(o.Card) || o.ClothesState >= 0);
+        }
+
+        internal static readonly string[] ClothesStateNames = { "シーンのまま", "全着", "半脱", "全脱" };
+
+        /// <summary>The clothes state chosen for the character: 0 全着, 1 半脱, 2 全脱, -1 as in the scene.</summary>
+        internal static int ClothesState(SceneCharacter chara) => OutfitOf(chara)?.ClothesState ?? -1;
+
+        /// <summary>全着・半脱・全脱 of all clothes at once (Studio's buttons), or -1 for each part as the scene has it.</summary>
+        internal static void SetClothesState(SceneCharacter chara, int state)
+        {
+            if (Settings == null) return;
+            var o = EditOutfit(chara);
+            if (o.ClothesState == state) return;
+            o.ClothesState = state;
+            SaveSettings();
+            if (chara.Placed) ApplyClothesState(chara, state);
+        }
+
+        private static void ApplyClothesState(SceneCharacter chara, int state)
+        {
+            var cha = chara.Oci.charInfo;
+            if (state >= 0)
+                cha.SetClothesStateAll((byte)state);
+            else if (chara.OriginalClothesState != null)
+                for (int i = 0; i < chara.OriginalClothesState.Length && i < cha.fileStatus.clothesState.Length; i++)
+                    cha.SetClothesState(i, chara.OriginalClothesState[i], false);
         }
 
         private static CharaOutfit EditOutfit(SceneCharacter chara)
@@ -1126,6 +1155,7 @@ namespace KKS_FreeHStudioSceneLoader
                 var card = ReplacementFile(chara.Info) ?? chara.OriginalCardFile;
                 if (card != null) ChangeCard(chara, card);
                 chara.Oci.SetCoordinateInfo((ChaFileDefine.CoordinateType)chara.Info.charFile.status.coordinateType, true);
+                ApplyClothesState(chara, -1);
             }
             catch (Exception ex)
             {
@@ -1143,16 +1173,19 @@ namespace KKS_FreeHStudioSceneLoader
             try
             {
                 if (o.Type >= 0) chara.Oci.SetCoordinateInfo((ChaFileDefine.CoordinateType)o.Type, true);
-                if (string.IsNullOrEmpty(o.Card)) return;
-                var path = System.IO.Path.IsPathRooted(o.Card) ? o.Card : System.IO.Path.Combine(CoordinateRoot, o.Card);
-                if (!System.IO.File.Exists(path))
+                if (!string.IsNullOrEmpty(o.Card))
                 {
-                    FreeHStudioSceneLoader.Logger.LogWarning($"Coordinate card for {chara.Name} not found: {path}");
-                    return;
+                    var path = System.IO.Path.IsPathRooted(o.Card) ? o.Card : System.IO.Path.Combine(CoordinateRoot, o.Card);
+                    if (!System.IO.File.Exists(path))
+                        FreeHStudioSceneLoader.Logger.LogWarning($"Coordinate card for {chara.Name} not found: {path}");
+                    else
+                    {
+                        if (chara.OriginalCardFile == null && ReplacementFile(chara.Info) == null) chara.OriginalCardFile = SaveOriginalCard(chara.Info);
+                        chara.Oci.LoadClothesFile(path);
+                        FreeHStudioSceneLoader.Logger.LogInfo($"Coordinate {path} put on {chara.Name}");
+                    }
                 }
-                if (chara.OriginalCardFile == null && ReplacementFile(chara.Info) == null) chara.OriginalCardFile = SaveOriginalCard(chara.Info);
-                chara.Oci.LoadClothesFile(path);
-                FreeHStudioSceneLoader.Logger.LogInfo($"Coordinate {path} put on {chara.Name}");
+                if (o.ClothesState >= 0) ApplyClothesState(chara, o.ClothesState);
             }
             catch (Exception ex)
             {

@@ -83,6 +83,8 @@ namespace KKS_FreeHStudioSceneLoader
         /// <summary>A coordinate card put on for <see cref="Type"/>, relative to UserData/coordinate (or a full path), or null.</summary>
         public string Card;
         public string Name;
+        /// <summary>All clothes at once: 0 全着, 1 半脱, 2 全脱; -1: as in the scene (each part as saved).</summary>
+        public int ClothesState = -1;
     }
 
     internal class LayoutPose
@@ -227,12 +229,13 @@ namespace KKS_FreeHStudioSceneLoader
                     WriteLayouts(e, kv.Value);
                     foreach (var o in kv.Value.Outfits.OrderBy(o => o.Key))
                     {
-                        if (o.Value.Type < 0 && string.IsNullOrEmpty(o.Value.Card)) continue;
+                        if (o.Value.Type < 0 && string.IsNullOrEmpty(o.Value.Card) && o.Value.ClothesState < 0) continue;
                         var oe = (XmlElement)e.AppendChild(doc.CreateElement("outfit"));
                         oe.SetAttribute("key", o.Key.ToString());
                         oe.SetAttribute("type", o.Value.Type.ToString());
                         if (!string.IsNullOrEmpty(o.Value.Card)) oe.SetAttribute("card", o.Value.Card);
                         if (!string.IsNullOrEmpty(o.Value.Name)) oe.SetAttribute("name", o.Value.Name);
+                        if (o.Value.ClothesState >= 0) oe.SetAttribute("clothes", o.Value.ClothesState.ToString());
                     }
                     foreach (var r in kv.Value.Replacements.OrderBy(r => r.Key))
                     {
@@ -287,6 +290,7 @@ namespace KKS_FreeHStudioSceneLoader
                                 Type = int.TryParse(oe.GetAttribute("type"), out var otype) ? otype : -1,
                                 Card = oe.HasAttribute("card") ? oe.GetAttribute("card") : null,
                                 Name = oe.HasAttribute("name") ? oe.GetAttribute("name") : null,
+                                ClothesState = int.TryParse(oe.GetAttribute("clothes"), out var oclothes) ? oclothes : -1,
                             };
                     foreach (XmlElement re in e.ChildNodes.OfType<XmlElement>().Where(x => x.Name == "replace"))
                         if (int.TryParse(re.GetAttribute("key"), out var rkey) && re.GetAttribute("card").Length > 0)

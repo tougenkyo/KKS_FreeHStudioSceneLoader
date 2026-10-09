@@ -21,7 +21,7 @@ namespace KKS_FreeHStudioSceneLoader
     {
         public const string GUID = "local.kks.freehstudiosceneloader";
         public const string PluginName = "Free H Studio Scene Loader (KKS port, experimental)";
-        public const string Version = "0.5.4";
+        public const string Version = "0.5.5";
 
         internal static new ManualLogSource Logger;
         internal static FreeHStudioSceneLoader Instance;
@@ -889,6 +889,12 @@ namespace KKS_FreeHStudioSceneLoader
             // Four per row: the game's four, then the ones MoreOutfits added
             int newType = GUILayout.SelectionGrid(Mathf.Clamp(type, 0, count - 1), names, 4);
             if (newType != type) StudioHost.SetOutfitType(chara, newType);
+            GUILayout.EndHorizontal();
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("服の状態", GUILayout.Width(56));
+            int state = StudioHost.ClothesState(chara);
+            int newState = GUILayout.Toolbar(state + 1, StudioHost.ClothesStateNames) - 1;
+            if (newState != state) StudioHost.SetClothesState(chara, newState);
             GUILayout.EndHorizontal();
             GUILayout.BeginHorizontal();
             var card = StudioHost.OutfitCardName(chara);
