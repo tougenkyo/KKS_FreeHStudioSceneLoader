@@ -21,7 +21,7 @@ namespace KKS_FreeHStudioSceneLoader
     {
         public const string GUID = "local.kks.freehstudiosceneloader";
         public const string PluginName = "Free H Studio Scene Loader (KKS port, experimental)";
-        public const string Version = "0.5.5";
+        public const string Version = "0.5.6";
 
         internal static new ManualLogSource Logger;
         internal static FreeHStudioSceneLoader Instance;
@@ -821,6 +821,28 @@ namespace KKS_FreeHStudioSceneLoader
 
         /// <summary>Which of the scene's characters are placed in H.</summary>
         private StudioHost.SceneCharacter _outfitOpen;
+        private GUIStyle _frameStyle, _chosenFrameStyle;
+        private GUIStyle FrameStyle => _frameStyle ?? (_frameStyle = MakeFrameStyle(new Color(0.65f, 0.65f, 0.7f, 0.9f)));
+        private GUIStyle ChosenFrameStyle => _chosenFrameStyle ?? (_chosenFrameStyle = MakeFrameStyle(ChosenFrameColor));
+
+        /// <summary>A box style that only draws a thin outline (the window background shows through).</summary>
+        private static GUIStyle MakeFrameStyle(Color color)
+        {
+            const int size = 8, line = 2;
+            var tex = new Texture2D(size, size, TextureFormat.ARGB32, false) { hideFlags = HideFlags.HideAndDontSave, filterMode = FilterMode.Point };
+            for (int y = 0; y < size; y++)
+                for (int x = 0; x < size; x++)
+                    tex.SetPixel(x, y, x < line || y < line || x >= size - line || y >= size - line ? color : Color.clear);
+            tex.Apply();
+            var style = new GUIStyle
+            {
+                border = new RectOffset(line + 1, line + 1, line + 1, line + 1),
+                padding = new RectOffset(6, 6, 4, 4),
+                margin = new RectOffset(0, 0, 2, 2),
+            };
+            style.normal.background = tex;
+            return style;
+        }
 
         private void DrawCharacterChoice()
         {
@@ -840,8 +862,11 @@ namespace KKS_FreeHStudioSceneLoader
                 GUI.enabled = female ? StudioHost.FemalesOn : StudioHost.MalesOn;
                 foreach (var chara in list)
                 {
+                    // A frame around each character (light red while its clothes are open)
                     GUILayout.BeginHorizontal();
-                    GUILayout.Space(18);
+                    GUILayout.Space(14);
+                    GUILayout.BeginVertical(_outfitOpen == chara ? ChosenFrameStyle : FrameStyle);
+                    GUILayout.BeginHorizontal();
                     StudioHost.SetCharacterEnabled(chara, GUILayout.Toggle(chara.Enabled, (chara.Female ? "♀ " : "♂ ") + chara.Name + (chara.ReplacedName != null ? $" → {chara.ReplacedName}" : "")));
                     DrawReplaceButtons(chara);
                     bool open = _outfitOpen == chara;
@@ -850,7 +875,7 @@ namespace KKS_FreeHStudioSceneLoader
                     if (_outfitOpen == chara)
                     {
                         GUILayout.BeginHorizontal();
-                        GUILayout.Space(36);
+                        GUILayout.Space(20);
                         GUILayout.BeginVertical();
                         bool enabled = GUI.enabled;
                         DrawOutfitControls(chara);
@@ -858,6 +883,8 @@ namespace KKS_FreeHStudioSceneLoader
                         GUILayout.EndVertical();
                         GUILayout.EndHorizontal();
                     }
+                    GUILayout.EndVertical();
+                    GUILayout.EndHorizontal();
                 }
                 GUI.enabled = true;
             }
