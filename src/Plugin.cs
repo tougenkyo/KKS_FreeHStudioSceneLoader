@@ -21,7 +21,7 @@ namespace KKS_FreeHStudioSceneLoader
     {
         public const string GUID = "local.kks.freehstudiosceneloader";
         public const string PluginName = "Free H Studio Scene Loader (KKS port, experimental)";
-        public const string Version = "0.3.23";
+        public const string Version = "0.4.2";
 
         internal static new ManualLogSource Logger;
         internal static FreeHStudioSceneLoader Instance;
@@ -32,13 +32,13 @@ namespace KKS_FreeHStudioSceneLoader
         internal static ConfigEntry<bool> PlayTimeline;
         internal static ConfigEntry<bool> ApplyPoseEditor;
         internal static ConfigEntry<bool> ApplyFKAndIK;
-        internal static ConfigEntry<bool> KkpeSavedBones, KkpeTimelineBones, KkpeBlendShapes, KkpeOptimizeIK, KkpeItems;
-        internal static ConfigEntry<string> KkpeSkipSavedBones;
-        internal static ConfigEntry<bool> KkpeTrace;
+        internal static ConfigEntry<bool> LogPoses;
         internal static ConfigEntry<KeyboardShortcut> WindowKey;
         internal static ConfigEntry<bool> PlaySoundItems;
         internal static ConfigEntry<bool> PlayCharaVoices;
+        internal static ConfigEntry<bool> MatchTimeOfDay;
         internal static ConfigEntry<bool> ShowButtonInH;
+        internal static ConfigEntry<float> WindowOpacity;
         internal static ConfigEntry<Vector2> ButtonInHPosition;
         internal static ConfigEntry<bool> HideBaseMap;
         internal static ConfigEntry<bool> ShowBackgroundImage;
@@ -63,21 +63,14 @@ namespace KKS_FreeHStudioSceneLoader
                 "Apply the bone and blend shape (facial expression) edits made with KKPE, which only runs in CharaStudio.");
             ApplyFKAndIK = Config.Bind("Studio plugins", "Apply FK and IK", true,
                 "Characters saved with FK and IK on at the same time (studio plugin \"FK and IK\", which only runs in CharaStudio) get both again, instead of IK only.");
-            const string diag = "Studio plugins (diagnostics)";
-            const string diagNote = " Only used when 'Apply KKPE pose edits' is on; read when the H scene starts. For finding differences from Studio.";
-            KkpeSavedBones = Config.Bind(diag, "KKPE: saved bone edits of characters", true, "Bone edits saved in the character (KKPE advanced mode)." + diagNote);
-            KkpeTimelineBones = Config.Bind(diag, "KKPE: bone edits animated by Timeline", true, "KKPE bone position/rotation/scale tracks of Timeline." + diagNote);
-            KkpeBlendShapes = Config.Bind(diag, "KKPE: blend shapes", true, "Saved and Timeline-animated blend shape weights (facial expressions)." + diagNote);
-            KkpeOptimizeIK = Config.Bind(diag, "KKPE: optimizeIK", true, "KKPE's IK setting on every character (spine stiffness and vertical body pull 0)." + diagNote);
-            KkpeItems = Config.Bind(diag, "KKPE: items", true, "KKPE edits of the scene's items." + diagNote);
-            KkpeTrace = Config.Bind(diag, "KKPE: log bone values every 2 seconds", false,
-                "Writes the saved, Timeline and actual rotation of the bones edited by KKPE to the log (before and after IK).");
-            KkpeSkipSavedBones = Config.Bind(diag, "KKPE: skip saved bone edits matching", "",
-                "Comma separated texts. A saved bone edit is skipped when \"character name:bone path\" contains one of them, e.g. \"Male 60\" or \"cf_d_bust\". A text ending with $ only matches the end of the bone path, e.g. \"cf_j_spine03$\"." + diagNote);
+            LogPoses = Config.Bind("Diagnostics", "Log character poses", false,
+                "Every 2 seconds during H, write the bone values, IK targets and FK/IK state of the studio scene's characters to the log and to BepInEx/FreeHStudioProbe.log (for comparing with Studio).");
             PlaySoundItems = Config.Bind("General", "Play studio sound items", true,
                 "Default for scenes not set up yet: play sound/voice items placed in the studio scene (they start playing as soon as the scene is loaded). Each scene keeps its own setting once changed in the windows.");
             PlayCharaVoices = Config.Bind("General", "Play character voice lists", false,
                 "Default for scenes not set up yet: play the characters' voice lists (Studio's voice playback) when they are placed. Each scene keeps its own setting once changed in the windows.");
+            MatchTimeOfDay = Config.Bind("General", "Match studio time of day", false,
+                "Default for scenes not set up yet: when a scene is chosen, set the Free H time of day (morning, day, evening, night) to the one saved in the studio scene, which decides how bright the map is. Each scene keeps its own setting once changed in the selection window.");
             WindowKey = Config.Bind("General", "Scene selection window", new KeyboardShortcut(KeyCode.F7),
                 "Opens the studio scene selection window on the Free H selection screen.");
             HideBaseMap = Config.Bind("General", "Hide base map for scenes without a map", true,
@@ -90,6 +83,8 @@ namespace KKS_FreeHStudioSceneLoader
                 "Show a button that opens the scene selection window on the Free H selection screen.");
             ButtonPosition = Config.Bind("Button", "Button position", new Vector2(0.5f, 0.01f),
                 "Position of the button as a fraction of the screen size (x: 0 = left, 1 = right; y: 0 = top, 1 = bottom).");
+            WindowOpacity = Config.Bind("Button", "Window background opacity", 0.85f,
+                new ConfigDescription("Opacity of the dark background of the plugin's windows (0 = transparent, 1 = opaque).", new AcceptableValueRange<float>(0.3f, 1f)));
             ShowButtonInH = Config.Bind("Button", "Show button in H", true,
                 "During H, show a button that opens the window for the scene's characters (same as the key).");
             ButtonInHPosition = Config.Bind("Button", "Button in H position", new Vector2(0.5f, 0.01f),
@@ -129,6 +124,18 @@ namespace KKS_FreeHStudioSceneLoader
             }
             try
             {
+                // Sideloader is another plugin: patch it by name, the scene loader works without this
+                var resolver = AccessTools.TypeByName("Sideloader.AutoResolver.UniversalAutoResolver");
+                var showError = resolver != null ? AccessTools.Method(resolver, "ShowGUIDError") : null;
+                if (showError != null) harmony.Patch(showError, postfix: new HarmonyMethod(typeof(StudioHost), nameof(StudioHost.OnMissingMod)));
+                else Logger.LogWarning("Sideloader's UniversalAutoResolver.ShowGUIDError not found; missing mods of scenes can't be listed");
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning($"Could not watch Sideloader's missing mod reports: {ex.GetBaseException().Message}");
+            }
+            try
+            {
                 PoseProbe.InstallPatches(harmony);
             }
             catch (Exception ex)
@@ -156,7 +163,7 @@ namespace KKS_FreeHStudioSceneLoader
         private static readonly string SceneRoot = Path.GetFullPath(Path.Combine(Paths.GameRootPath, "UserData/studio/scene"));
 
         private bool _showWindow;
-        private Rect _windowRect = new Rect(80, 80, 560, 640);
+        private Rect _windowRect = new Rect(40, 60, WindowWidth, 600);
         private Vector2 _scroll;
         private List<string> _files;
         private string[] _pending;   // files still to be checked for scene data
@@ -192,6 +199,7 @@ namespace KKS_FreeHStudioSceneLoader
             {
                 _files = null;
                 StudioHost.EnsureCreated();
+                if (Selection.PreviewPath != null && _previewPath != Selection.PreviewPath) SetPreview(Selection.PreviewPath);
             }
         }
 
@@ -204,7 +212,18 @@ namespace KKS_FreeHStudioSceneLoader
 
         private GUIStyle _buttonStyle;
 
+        /// <summary>Screen rects of the windows and buttons drawn in this frame (see <see cref="GuiBlocker"/>).</summary>
+        private readonly List<Rect> _blockRects = new List<Rect>();
+
         private void OnGUI()
+        {
+            bool repaint = Event.current.type == EventType.Repaint;
+            if (repaint) _blockRects.Clear();
+            DrawGui();
+            if (repaint) GuiBlocker.SetRects(_blockRects);
+        }
+
+        private void DrawGui()
         {
             if (_freeH == null)
             {
@@ -215,12 +234,54 @@ namespace KKS_FreeHStudioSceneLoader
                     if (DrawButton(label, ButtonInHPosition.Value)) _showCharaWindow = !_showCharaWindow;
                 }
                 if (_showCharaWindow)
-                    _charaWindowRect = GUILayout.Window(GUID.GetHashCode() + 1, _charaWindowRect, DrawCharaWindow, "スタジオシーンのキャラクター", GUILayout.Width(440));
+                {
+                    _charaWindowRect = KeepOnScreen(GUILayout.Window(GUID.GetHashCode() + 1, _charaWindowRect, DrawCharaWindow, "スタジオシーンのキャラクター", WindowStyle, GUILayout.Width(440)));
+                    _blockRects.Add(_charaWindowRect);
+                }
                 return;
             }
             if (ShowButton.Value) DrawOpenButton();
             if (!_showWindow) return;
-            _windowRect = GUILayout.Window(GUID.GetHashCode(), _windowRect, DrawWindow, "スタジオシーンをFree-Hのマップにする", GUILayout.Width(560));
+            // Two columns: the scene list on the left, the chosen scene's settings on the right
+            float width = Mathf.Min(WindowWidth, Screen.width - 20);
+            _windowRect.width = width;
+            _windowRect = KeepOnScreen(GUILayout.Window(GUID.GetHashCode(), _windowRect, DrawWindow, "スタジオシーンをFree-Hのマップにする", WindowStyle, GUILayout.Width(width)));
+            _blockRects.Add(_windowRect);
+        }
+
+        private const float WindowWidth = 1040f;
+
+        private GUIStyle _windowStyle;
+        private Texture2D _windowTexture;
+        private float _windowStyleOpacity = -1f;
+
+        /// <summary>The default window with a darker, still translucent background (the default one is hard to read on bright screens).</summary>
+        private GUIStyle WindowStyle
+        {
+            get
+            {
+                float opacity = WindowOpacity.Value;
+                if (_windowStyle != null && _windowTexture != null && Mathf.Approximately(opacity, _windowStyleOpacity)) return _windowStyle;
+                if (_windowTexture == null) _windowTexture = new Texture2D(1, 1, TextureFormat.ARGB32, false) { hideFlags = HideFlags.HideAndDontSave };
+                _windowTexture.SetPixel(0, 0, new Color(0.08f, 0.08f, 0.1f, opacity));
+                _windowTexture.Apply();
+                _windowStyle = new GUIStyle(GUI.skin.window);
+                foreach (var state in new[] { _windowStyle.normal, _windowStyle.onNormal, _windowStyle.focused, _windowStyle.onFocused, _windowStyle.hover, _windowStyle.onHover, _windowStyle.active, _windowStyle.onActive })
+                {
+                    state.background = _windowTexture;
+                    state.textColor = Color.white;
+                }
+                _windowStyleOpacity = opacity;
+                return _windowStyle;
+            }
+        }
+
+        /// <summary>Keeps a window's title bar on the screen, so it can't be dragged away.</summary>
+        private static Rect KeepOnScreen(Rect r)
+        {
+            r.x = Mathf.Clamp(r.x, 0, Mathf.Max(0, Screen.width - r.width));
+            r.y = Mathf.Clamp(r.y, 0, Mathf.Max(0, Screen.height - 40));
+            return r;
         }
 
         private void DrawOpenButton()
@@ -245,6 +306,7 @@ namespace KKS_FreeHStudioSceneLoader
                 Mathf.Clamp(pos.x * Screen.width - size.x / 2, 0, Screen.width - size.x),
                 Mathf.Clamp(pos.y * Screen.height, 0, Screen.height - size.y),
                 size.x, size.y);
+            _blockRects.Add(rect);
             return GUI.Button(rect, label, _buttonStyle);
         }
 
@@ -267,6 +329,27 @@ namespace KKS_FreeHStudioSceneLoader
             if (_files == null) return; // filled in by ScanSceneFiles (Update), never while drawing
 
             GUILayout.BeginHorizontal();
+            GUILayout.BeginVertical(GUILayout.Width(ListColumnWidth));
+            DrawSceneList();
+            GUILayout.EndVertical();
+            GUILayout.Space(8);
+            GUILayout.BeginVertical();
+            _settingsScroll = GUILayout.BeginScrollView(_settingsScroll, GUILayout.Height(ColumnHeight));
+            DrawSceneSettings();
+            GUILayout.EndScrollView();
+            GUILayout.EndVertical();
+            GUILayout.EndHorizontal();
+            GUI.DragWindow();
+        }
+
+        private const float ListColumnWidth = 520f;
+        private const float ColumnHeight = 600f;
+        private Vector2 _settingsScroll;
+
+        /// <summary>Left column: finding and choosing a scene.</summary>
+        private void DrawSceneList()
+        {
+            GUILayout.BeginHorizontal();
             GUILayout.Label("絞り込み:", GUILayout.Width(60));
             _filter = GUILayout.TextField(_filter);
             if (GUILayout.Button("再読込", GUILayout.Width(70))) _reloadRequested = true;
@@ -283,31 +366,48 @@ namespace KKS_FreeHStudioSceneLoader
                 var rel = (SceneFile.IsKoikatsuFormat(f) ? "[KK] " : "[KKS] ") + f.Substring(SceneRoot.Length).TrimStart('\\', '/');
                 if (_filter.Length > 0 && rel.IndexOf(_filter, StringComparison.OrdinalIgnoreCase) < 0) continue;
                 var style = f == _previewPath ? GUI.skin.box : GUI.skin.button;
-                if (GUILayout.Button(rel, style, GUILayout.Width(500)))
+                if (GUILayout.Button(rel, style, GUILayout.Width(ListColumnWidth - 30)) && (f != _previewPath || Selection.PreviewPath != f))
+                {
                     SetPreview(f);
+                    _status = Selection.Preview(_freeH, f);
+                }
             }
             GUILayout.EndScrollView();
 
             // Fixed size so the window does not grow to the texture size
-            var previewRect = GUILayoutUtility.GetRect(520, 180, GUILayout.Width(520), GUILayout.Height(180));
+            var previewRect = GUILayoutUtility.GetRect(ListColumnWidth, 180, GUILayout.Width(ListColumnWidth), GUILayout.Height(180));
             if (_preview != null)
                 GUI.DrawTexture(previewRect, _preview, ScaleMode.ScaleToFit);
 
             GUILayout.BeginHorizontal();
-            GUI.enabled = _previewPath != null;
+            GUI.enabled = _previewPath != null && Selection.PreviewPath == _previewPath && Selection.ScenePath != _previewPath;
             if (GUILayout.Button("このシーンを使う"))
-                _status = Selection.Select(_freeH, _previewPath);
+                _status = Selection.Use(_freeH);
             GUI.enabled = Selection.IsSelected;
             if (GUILayout.Button("解除"))
             {
-                Selection.Clear();
+                Selection.Unset();
                 _status = "解除しました。通常のマップを使います。";
             }
             GUI.enabled = true;
             GUILayout.EndHorizontal();
 
             GUILayout.Label(_status);
-            if (Selection.IsSelected && !Selection.NoMap && Selection.Candidates.Count > 1)
+        }
+
+        /// <summary>Right column: the settings of the chosen scene (saved per scene).</summary>
+        private void DrawSceneSettings()
+        {
+            if (Selection.PreviewPath == null || !StudioHost.HasSceneData)
+            {
+                GUILayout.Label("左の一覧でシーンをクリックすると、ここにシーンの詳細と設定（土台のマップ、時間帯、キャラクター、音）が出ます。設定はシーンごとに保存します。「このシーンを使う」でフリーHにセットします。");
+                return;
+            }
+            GUILayout.Label($"シーン: {Path.GetFileNameWithoutExtension(Selection.PreviewPath)}");
+            GUILayout.Label(Selection.ScenePath == Selection.PreviewPath ? "状態: セット済み（このシーンでHを始めます）" : "状態: 未セット（「このシーンを使う」でセットします）");
+            GUILayout.Label(Selection.MapDescription);
+            DrawMissingMods();
+            if (!Selection.NoMap && Selection.Candidates.Count > 1)
             {
                 GUILayout.Label("土台のマップ: このスタジオマップを使うFree-H用マップが複数あります（H位置が違います。シーンごとに保存します）");
                 GUILayout.BeginHorizontal();
@@ -316,16 +416,65 @@ namespace KKS_FreeHStudioSceneLoader
                         Selection.ChooseMap(_freeH, map);
                 GUILayout.EndHorizontal();
             }
-            if (Selection.IsSelected)
+            if (StudioHost.Settings != null && StudioHost.SceneSunLightType >= 0 && StudioHost.SceneSunLightType < TimeNames.Length)
             {
-                DrawCharacterChoice();
-                GUILayout.Label("音（シーンごとに保存します。H 中も F7 の窓で切り替えられます）:");
-                DrawSoundChoice();
+                bool match = GUILayout.Toggle(StudioHost.Settings.MatchTime, $"時間帯をスタジオのシーンに合わせる（シーン: {TimeNames[StudioHost.SceneSunLightType]}。マップの明るさが変わります）");
+                if (match != StudioHost.Settings.MatchTime)
+                {
+                    StudioHost.SetMatchTime(match);
+                    if (match && Selection.IsSelected) Selection.ApplySceneTime(_freeH);
+                }
             }
-            GUI.DragWindow();
+            GUILayout.Space(6);
+            DrawCharacterChoice();
+            GUILayout.Space(6);
+            GUILayout.Label("音（H 中も F7 の窓で切り替えられます）:");
+            DrawSoundChoice();
         }
 
-        private Vector2 _charaChoiceScroll;
+        internal static readonly string[] TimeNames = { "朝", "昼", "夕方", "夜" };
+
+        private string _missingShownFor;
+        private Vector2 _missingScroll;
+        private string _copyStatus;
+
+        /// <summary>The mods the scene needs that are not installed (as reported by Sideloader when it was read).</summary>
+        private void DrawMissingMods()
+        {
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("足りないMODを調べる"))
+            {
+                _missingShownFor = Selection.PreviewPath;
+                _copyStatus = null;
+            }
+            bool shown = _missingShownFor != null && _missingShownFor == Selection.PreviewPath;
+            GUI.enabled = shown;
+            if (GUILayout.Button("クリップボードにコピー"))
+            {
+                GUIUtility.systemCopyBuffer = StudioHost.MissingModsText(Selection.PreviewPath);
+                _copyStatus = "コピーしました。";
+            }
+            GUI.enabled = true;
+            GUILayout.EndHorizontal();
+            if (!shown) return;
+            var mods = StudioHost.MissingMods;
+            if (mods.Count == 0)
+            {
+                GUILayout.Label("足りないMODはありません（シーンを読み込んだときに Sideloader が見つけたもの）。");
+                return;
+            }
+            GUILayout.Label($"足りないMOD: {mods.Count} 種類（使われている回数の多い順）" + (_copyStatus != null ? "　" + _copyStatus : ""));
+            _missingScroll = GUILayout.BeginScrollView(_missingScroll, GUILayout.Height(Mathf.Min(mods.Count, 8) * 22 + 10));
+            foreach (var m in mods.OrderByDescending(m => m.Count))
+            {
+                var label = $"{(string.IsNullOrEmpty(m.Name) ? m.Guid : m.Name)}（{m.Count}）";
+                if (!string.IsNullOrEmpty(m.Author)) label += $"  作者: {m.Author}";
+                if (!string.IsNullOrEmpty(m.Website)) label += $"  {m.Website}";
+                GUILayout.Label(label);
+            }
+            GUILayout.EndScrollView();
+            GUILayout.Label("（ ）内はシーンで使われている回数です。シェーダーなど、Hで置いたときに初めて分かるものは含みません。");
+        }
 
         /// <summary>Which of the scene's characters are placed in H.</summary>
         private void DrawCharacterChoice()
@@ -341,14 +490,12 @@ namespace KKS_FreeHStudioSceneLoader
             StudioHost.SetSexEnabled(true, GUILayout.Toggle(StudioHost.FemalesOn, $"女性を表示（{charas.Count(c => c.Female)} 人）"));
             StudioHost.SetSexEnabled(false, GUILayout.Toggle(StudioHost.MalesOn, $"男性を表示（{charas.Count(c => !c.Female)} 人）"));
             GUILayout.EndHorizontal();
-            _charaChoiceScroll = GUILayout.BeginScrollView(_charaChoiceScroll, GUILayout.Height(Mathf.Min(charas.Count, 5) * 24 + 8));
             foreach (var chara in charas)
             {
                 GUI.enabled = chara.Female ? StudioHost.FemalesOn : StudioHost.MalesOn;
                 StudioHost.SetCharacterEnabled(chara, GUILayout.Toggle(chara.Enabled, (chara.Female ? "♀ " : "♂ ") + chara.Name));
             }
             GUI.enabled = true;
-            GUILayout.EndScrollView();
         }
 
         /// <summary>The scene's sounds: when it is loaded (selection window) and while it is placed (H window). Saved per scene.</summary>
@@ -523,64 +670,7 @@ namespace KKS_FreeHStudioSceneLoader
             }
             GUILayout.Label("音（シーンごとに保存します）:");
             DrawSoundChoice();
-            DrawDiagnostics();
             GUI.DragWindow();
-        }
-
-        private bool _showDiagnostics;
-        private Vector2 _diagScroll;
-        private readonly HashSet<string> _openPoses = new HashSet<string>();
-
-        /// <summary>Switches parts of the studio plugin reproduction off, to find what differs from Studio.</summary>
-        private void DrawDiagnostics()
-        {
-            var animator = SceneAnimator.Instance;
-            if (animator == null) return;
-            _showDiagnostics = GUILayout.Toggle(_showDiagnostics, "診断（スタジオとの違いを調べる用。チェックを外すとその場で無効になります）");
-            if (!_showDiagnostics) return;
-            _diagScroll = GUILayout.BeginScrollView(_diagScroll, GUILayout.Height(260));
-            animator.ConstraintsOn = GUILayout.Toggle(animator.ConstraintsOn, $"NodesConstraints の連結（{animator.ConstraintCount} 件）");
-            animator.LateBeforeIK = GUILayout.Toggle(animator.LateBeforeIK, "連結と Timeline の後処理を IK の前に当てる（外すと IK・FK の後）");
-            foreach (var pose in animator.Poses.ToList())
-            {
-                var key = pose.Name ?? "";
-                GUILayout.BeginHorizontal();
-                bool open = _openPoses.Contains(key);
-                if (GUILayout.Button(open ? "▼" : "▶", GUILayout.Width(28)))
-                {
-                    if (open) _openPoses.Remove(key); else _openPoses.Add(key);
-                }
-                GUILayout.Label($"KKPE: {key}");
-                GUILayout.EndHorizontal();
-                GUILayout.BeginHorizontal();
-                GUILayout.Space(30);
-                bool staticOn = GUILayout.Toggle(pose.StaticOn, $"固定ポーズ（{pose.Static.Count}）");
-                bool animatedOn = GUILayout.Toggle(pose.AnimatedOn, $"Timeline（{pose.Animated.Count}）");
-                pose.OptimizeIK = GUILayout.Toggle(pose.OptimizeIK, "optimizeIK");
-                GUILayout.EndHorizontal();
-                if (staticOn != pose.StaticOn || animatedOn != pose.AnimatedOn)
-                {
-                    pose.StaticOn = staticOn;
-                    pose.AnimatedOn = animatedOn;
-                    pose.RestoreAll();
-                }
-                if (!open) continue;
-                foreach (var kv in pose.Static.Concat(pose.Animated).ToList())
-                {
-                    GUILayout.BeginHorizontal();
-                    GUILayout.Space(50);
-                    var kind = pose.Static.ContainsKey(kv.Key) && pose.Static[kv.Key] == kv.Value ? "固定" : "TL";
-                    var parts = (kv.Value.Position.HasValue ? "位置" : "") + (kv.Value.Rotation.HasValue ? "回転" : "") + (kv.Value.Scale.HasValue ? "大きさ" : "");
-                    bool on = GUILayout.Toggle(kv.Value.On, $"[{kind}] {SceneAnimator.BoneName(kv.Key)} {parts}");
-                    if (on != kv.Value.On)
-                    {
-                        kv.Value.On = on;
-                        pose.Restore(kv.Key);
-                    }
-                    GUILayout.EndHorizontal();
-                }
-            }
-            GUILayout.EndScrollView();
         }
 
         /// <summary>The point the H camera turns around (the center of the view).</summary>
@@ -606,61 +696,119 @@ namespace KKS_FreeHStudioSceneLoader
         internal static bool NoMap { get; private set; }
         internal static string BaseMapName { get; private set; }
 
-        internal static string Select(FreeHScene freeH, string path)
+        /// <summary>The scene whose data is loaded and shown in the window (not necessarily set for H).</summary>
+        internal static string PreviewPath { get; private set; }
+        private static string _error;
+        private static bool _approximate;
+
+        /// <summary>
+        /// Reads a scene to show its details. The data of one scene is loaded at a time, so reading another one also
+        /// unsets a scene that was set before.
+        /// </summary>
+        internal static string Preview(FreeHScene freeH, string path)
         {
+            if (path == PreviewPath && StudioHost.HasSceneData) return null;
+            bool unset = IsSelected;
             Clear();
+            string prefix = unset ? "セットしていたシーンは解除しました。\n" : "";
             if (!SceneFile.IsScene(path))
-                return "このファイルはスタジオのシーンではありません（シーンのデータが入っていない画像です）。";
+                return prefix + "このファイルはスタジオのシーンではありません（シーンのデータが入っていない画像です）。";
             if (!StudioHost.LoadSceneData(path, out var studioMapNo))
-                return SceneFile.IsKoikatsuFormat(path)
+                return prefix + (SceneFile.IsKoikatsuFormat(path)
                     ? "このシーンを読み込めませんでした。無印コイカツ（KK）形式のシーンで、キャラクターのデータを読めなかった可能性があります。"
-                    : "このシーンを読み込めませんでした。output_log.txt を確認してください。";
-
+                    : "このシーンを読み込めませんでした。output_log.txt を確認してください。");
+            PreviewPath = path;
             if (studioMapNo < 0)
-                return SelectWithoutMap(freeH, path);
-
-            var baseMap = freeH.member.map;
-            var candidates = StudioHost.FindFreeHMaps(baseMap, studioMapNo, out var reason, out var approximate);
-            var param = candidates.FirstOrDefault();
-            if (param == null)
             {
-                StudioHost.DiscardSceneData();
-                return reason;
+                NoMap = true;
+                return prefix + "「このシーンを使う」でフリーHにセットします。";
             }
-            Candidates = candidates;
+            Candidates = StudioHost.FindFreeHMaps(freeH.member.map, studioMapNo, out _error, out _approximate);
+            if (Candidates.Count == 0) return prefix + _error;
+            MapNo = Candidates[0].No;
+            return prefix + "「このシーンを使う」でフリーHにセットします。";
+        }
 
-            ScenePath = path;
-            MapNo = param.No;
+        /// <summary>The base map line of the details.</summary>
+        internal static string MapDescription
+        {
+            get
+            {
+                if (PreviewPath == null) return "";
+                if (NoMap) return "土台のマップ: なし（アイテムだけのシーン。フリーHで選んでいるマップのH位置を使います）";
+                if (_error != null) return "土台のマップ: " + _error;
+                var map = Candidates.FirstOrDefault(c => c.No == MapNo);
+                return map == null ? "" : $"土台のマップ: {map.DisplayName}（No {map.No}）" +
+                    (_approximate ? "\n注意: スタジオ専用マップを通常版のマップに対応させました。アイテムの位置が少しずれる可能性があります。" : "");
+            }
+        }
+
+        /// <summary>Sets the scene shown in the window for H: switches the Free H map to its base map.</summary>
+        internal static string Use(FreeHScene freeH)
+        {
+            if (PreviewPath == null || !StudioHost.HasSceneData) return "先に一覧でシーンを選んでください。";
+            if (NoMap) return UseWithoutMap(freeH);
+            var param = Candidates.FirstOrDefault(c => c.No == MapNo);
+            if (param == null) return _error ?? "このシーンに使えるフリーHのマップがありません。";
+
+            ScenePath = PreviewPath;
             // Setting the result map makes the game load this map (and its H points) when H starts
             freeH.member.resultMapInfo.Value = param;
             Hooks.ApplySceneThumbnail(freeH);
-            FreeHStudioSceneLoader.Logger.LogInfo($"Selected studio scene {path} on Free H map {param.No} ({param.MapName}){(approximate ? " [approximate match]" : "")}" +
-                (candidates.Count > 1 ? $", other Free H maps with the same studio map: {string.Join(", ", candidates.Skip(1).Select(c => $"{c.No} ({c.MapName})").ToArray())}" : ""));
-            return $"選択しました。土台のマップ: {param.DisplayName}（No {param.No}）。" +
-                   (approximate ? "\n注意: スタジオ専用マップを通常版のマップに対応させました。アイテムの位置が少しずれる可能性があります。" : "");
+            if (StudioHost.Settings != null && StudioHost.Settings.MatchTime) ApplySceneTime(freeH);
+            FreeHStudioSceneLoader.Logger.LogInfo($"Selected studio scene {ScenePath} on Free H map {param.No} ({param.MapName}){(_approximate ? " [approximate match]" : "")}" +
+                (Candidates.Count > 1 ? $", other Free H maps with the same studio map: {string.Join(", ", Candidates.Where(c => c != param).Select(c => $"{c.No} ({c.MapName})").ToArray())}" : ""));
+            return $"セットしました。土台のマップ: {param.DisplayName}（No {param.No}）。";
         }
 
         /// <summary>
         /// A scene built from items only. The map currently chosen in the Free H screen provides the H positions;
         /// the scene is placed around the H start position and the map itself is hidden.
         /// </summary>
-        private static string SelectWithoutMap(FreeHScene freeH, string path)
+        private static string UseWithoutMap(FreeHScene freeH)
         {
             var param = freeH.member.resultMapInfo.Value;
             if (param == null || !param.isFreeH)
-            {
-                StudioHost.DiscardSceneData();
-                return "このシーンには土台のマップがありません。先に通常のマップ選択で、H位置に使うマップを選んでから、もう一度選んでください。";
-            }
-            ScenePath = path;
-            NoMap = true;
+                return "このシーンには土台のマップがありません。先に通常のマップ選択で、H位置に使うマップを選んでから、もう一度押してください。";
+            ScenePath = PreviewPath;
             MapNo = param.No;
             BaseMapName = param.DisplayName;
             Hooks.ApplySceneThumbnail(freeH);
-            FreeHStudioSceneLoader.Logger.LogInfo($"Selected studio scene {path} (no studio map), H positions from Free H map {param.No} ({param.MapName})");
-            return $"選択しました。このシーンには土台のマップがないため、「{param.DisplayName}」のH位置を使います" +
+            if (StudioHost.Settings != null && StudioHost.Settings.MatchTime) ApplySceneTime(freeH);
+            FreeHStudioSceneLoader.Logger.LogInfo($"Selected studio scene {ScenePath} (no studio map), H positions from Free H map {param.No} ({param.MapName})");
+            return $"セットしました。このシーンには土台のマップがないため、「{param.DisplayName}」のH位置を使います" +
                    (FreeHStudioSceneLoader.HideBaseMap.Value ? "（マップ自体は表示しません）。" : "。") +
                    "\nシーンは、シーン内の女の子の位置がHの開始位置に来るように置きます。通常のマップ選択で別のマップを選ぶと、H位置だけ変わります。";
+        }
+
+        /// <summary>Stops using the scene for H; its details stay shown.</summary>
+        internal static void Unset()
+        {
+            ScenePath = null;
+            BaseMapName = null;
+        }
+
+        /// <summary>
+        /// Sets the Free H time of day to the studio scene's (the toggles of every H mode, like FreeHScene.SetMapTimeZone).
+        /// The secret beach (map 9) has its own night-only times and is left alone. It can still be changed afterwards.
+        /// </summary>
+        internal static void ApplySceneTime(FreeHScene freeH)
+        {
+            int time = StudioHost.SceneSunLightType;
+            var map = freeH.member.resultMapInfo.Value;
+            if (time < 0 || time > 3 || map == null || map.No == 9) return;
+            try
+            {
+                freeH.member.resultTimeZone.Value = time;
+                var t = Traverse.Create(freeH);
+                for (int mode = 0; mode < 4; mode++)
+                    t.Method("SetTimeZone", new[] { typeof(int), typeof(int), typeof(bool) }).GetValue(mode, time, false);
+                FreeHStudioSceneLoader.Logger.LogInfo($"Free H time of day set to the studio scene's: {FreeHStudioSceneLoader.TimeNames[time]} ({time})");
+            }
+            catch (Exception ex)
+            {
+                FreeHStudioSceneLoader.Logger.LogWarning($"Could not set the Free H time of day: {ex.Message}");
+            }
         }
 
         /// <summary>Free H maps that load the same studio map as the scene (best first), when there is one.</summary>
@@ -669,11 +817,12 @@ namespace KKS_FreeHStudioSceneLoader
         /// <summary>Uses another of the <see cref="Candidates"/> (they differ in the H positions) and remembers it for the scene.</summary>
         internal static void ChooseMap(FreeHScene freeH, MapInfo.Param param)
         {
-            if (!IsSelected || NoMap || param == null) return;
+            if (PreviewPath == null || NoMap || param == null) return;
             MapNo = param.No; // first, so that the map change is not taken as leaving the scene
+            StudioHost.SetFreeHMap(param.No);
+            if (!IsSelected) return;
             freeH.member.resultMapInfo.Value = param;
             Hooks.ApplySceneThumbnail(freeH);
-            StudioHost.SetFreeHMap(param.No);
             FreeHStudioSceneLoader.Logger.LogInfo($"Studio scene now on Free H map {param.No} ({param.MapName})");
         }
 
@@ -687,6 +836,9 @@ namespace KKS_FreeHStudioSceneLoader
         internal static void Clear()
         {
             ScenePath = null;
+            PreviewPath = null;
+            _error = null;
+            _approximate = false;
             MapNo = -1;
             NoMap = false;
             Candidates = new List<MapInfo.Param>();

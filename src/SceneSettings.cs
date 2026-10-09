@@ -19,6 +19,8 @@ namespace KKS_FreeHStudioSceneLoader
         public bool SoundItems;
         /// <summary>The characters' voice lists (Studio's voice playback), started when the characters are placed.</summary>
         public bool CharaVoices;
+        /// <summary>Set the Free H time of day to the scene's (Studio's map light: morning, day, evening, night).</summary>
+        public bool MatchTime;
         /// <summary>The Free H map chosen when several use the scene's studio map (-1: not chosen).</summary>
         public int FreeHMap = -1;
         /// <summary>dicKey of the characters turned off in the selection window.</summary>
@@ -55,6 +57,7 @@ namespace KKS_FreeHStudioSceneLoader
             Males = FreeHStudioSceneLoader.LoadMales.Value,
             SoundItems = FreeHStudioSceneLoader.PlaySoundItems.Value,
             CharaVoices = FreeHStudioSceneLoader.PlayCharaVoices.Value,
+            MatchTime = FreeHStudioSceneLoader.MatchTimeOfDay.Value,
         };
 
         private static bool ReadBool(XmlElement e, string name, bool fallback) =>
@@ -76,6 +79,7 @@ namespace KKS_FreeHStudioSceneLoader
                     e.SetAttribute("males", kv.Value.Males ? "true" : "false");
                     e.SetAttribute("soundItems", kv.Value.SoundItems ? "true" : "false");
                     e.SetAttribute("charaVoices", kv.Value.CharaVoices ? "true" : "false");
+                    e.SetAttribute("matchTime", kv.Value.MatchTime ? "true" : "false");
                     if (kv.Value.FreeHMap >= 0) e.SetAttribute("freeHMap", kv.Value.FreeHMap.ToString());
                     if (kv.Value.HiddenCharacters.Count > 0)
                         e.SetAttribute("hiddenCharacters", string.Join(",", kv.Value.HiddenCharacters.OrderBy(i => i).Select(i => i.ToString()).ToArray()));
@@ -112,6 +116,7 @@ namespace KKS_FreeHStudioSceneLoader
                         Males = ReadBool(e, "males", defaults.Males),
                         SoundItems = ReadBool(e, "soundItems", defaults.SoundItems),
                         CharaVoices = ReadBool(e, "charaVoices", defaults.CharaVoices),
+                        MatchTime = ReadBool(e, "matchTime", defaults.MatchTime),
                     };
                     if (int.TryParse(e.GetAttribute("freeHMap"), out var map)) settings.FreeHMap = map;
                     foreach (var s in e.GetAttribute("hiddenCharacters").Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))

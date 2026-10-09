@@ -91,7 +91,7 @@ namespace KKS_FreeHStudioSceneLoader
             try
             {
                 var timeZone = Traverse.Create(proc).Field("dataH").Field("timezoneFreeH").GetValue<int>();
-                string[] times = { "朝", "昼", "夕方", "夜" };
+                var times = FreeHStudioSceneLoader.TimeNames;
                 string Name(int t) => t >= 0 && t < times.Length ? times[t] : t.ToString();
                 FreeHStudioSceneLoader.Logger.LogInfo($"H map {proc.map.no} ({proc.map.ConvertMapName(proc.map.no)}), Free H time of day {Name(timeZone)} ({timeZone}), studio scene time of day {Name(StudioHost.SceneSunLightType)} ({StudioHost.SceneSunLightType})");
             }

@@ -100,9 +100,8 @@ namespace KKS_FreeHStudioSceneLoader
             }
             RetryConstraints();
             // NodesConstraints: constraints involving guide objects are also applied right after Timeline
-            if (ConstraintsOn)
-                foreach (var c in _constraints)
-                    c.ApplyEarly();
+            foreach (var c in _constraints)
+                c.ApplyEarly();
         }
 
         private static bool _loopInstalled;
@@ -142,7 +141,7 @@ namespace KKS_FreeHStudioSceneLoader
         /// <summary>Diagnostics: the same numbers as the Studio-side probe, after every LateUpdate.</summary>
         private static void Probe()
         {
-            if (!FreeHStudioSceneLoader.KkpeTrace.Value || Time.realtimeSinceStartup < _nextProbe) return;
+            if (!FreeHStudioSceneLoader.LogPoses.Value || Time.realtimeSinceStartup < _nextProbe) return;
             if (!StudioHost.HasPlacedCharacters || !Singleton<Studio.Studio>.IsInstance()) return;
             _nextProbe = Time.realtimeSinceStartup + 2f;
             PoseProbe.Log(FreeHStudioSceneLoader.Logger.LogInfo, "H", Instance != null ? Instance._time : 0f,
@@ -160,12 +159,6 @@ namespace KKS_FreeHStudioSceneLoader
             try
             {
                 foreach (var pose in self._poses.Values) pose.Apply();
-                // Diagnostics: Timeline's late values and the constraints before IK instead of after it
-                if (self.LateBeforeIK)
-                {
-                    self._lateFrame = Time.frameCount;
-                    self.AfterAllLateUpdates();
-                }
             }
             catch (Exception ex)
             {
@@ -184,27 +177,13 @@ namespace KKS_FreeHStudioSceneLoader
             self.AfterAllLateUpdates();
         }
 
-        private float _nextTrace;
-
         private void AfterAllLateUpdates()
         {
-            if (PoseData.Trace)
-            {
-                foreach (var pose in _poses.Values) pose.TraceBones("after IK/FK");
-                foreach (var pose in _poses.Values) pose.TraceWrists();
-                PoseData.Trace = false;
-            }
-            if (FreeHStudioSceneLoader.KkpeTrace.Value && Time.realtimeSinceStartup > _nextTrace)
-            {
-                _nextTrace = Time.realtimeSinceStartup + 2f;
-                PoseData.Trace = true; // traced in the next frame's pose phase and late phase
-            }
             try
             {
                 if (_tracks.Count > 0 && _duration > 0f) Interpolate(false);
                 foreach (var guide in _scaledGuides) StudioHost.ApplyScale(guide);
-                if (ConstraintsOn)
-                    foreach (var c in _constraints) c.ApplyLate();
+                foreach (var c in _constraints) c.ApplyLate();
             }
             catch (Exception ex)
             {
@@ -432,7 +411,6 @@ namespace KKS_FreeHStudioSceneLoader
                 case "boneRot":
                 case "boneScale":
                 {
-                    if (!FreeHStudioSceneLoader.KkpeTimelineBones.Value) return null;
                     var bone = pose.Root.Find(node.Attributes["parameter"].Value);
                     if (bone == null) throw new InvalidOperationException("bone not found");
                     if (id == "bonePos") return new Track { Read = n => V3(n, "value"), Before = (l, r, f) => pose.SetPosition(bone, Vector3.LerpUnclamped((Vector3)l, (Vector3)r, f)) };
@@ -441,7 +419,6 @@ namespace KKS_FreeHStudioSceneLoader
                 }
                 case "lastBlendShape":
                 {
-                    if (!FreeHStudioSceneLoader.KkpeBlendShapes.Value) return null;
                     var renderer = pose.Blend.Get(node.Attributes["parameter1"].Value);
                     int index = XmlConvert.ToInt32(node.Attributes["parameter2"].Value);
                     if (renderer == null || index < 0) throw new InvalidOperationException("blend shape renderer not found");
@@ -459,7 +436,6 @@ namespace KKS_FreeHStudioSceneLoader
                 case "groupBlendShape":
                 case "groupBlendShapeLink":
                 {
-                    if (!FreeHStudioSceneLoader.KkpeBlendShapes.Value) return null;
                     var renderer = pose.Blend.Get(node.Attributes["parameter"].Value);
                     if (renderer == null) throw new InvalidOperationException("blend shape renderer not found");
                     return new Track
@@ -534,11 +510,11 @@ namespace KKS_FreeHStudioSceneLoader
                         doc.LoadXml(text);
                         info = doc.DocumentElement;
                     }
-                    if (info != null) pose.LoadXml(info, FreeHStudioSceneLoader.KkpeSavedBones.Value, FreeHStudioSceneLoader.KkpeBlendShapes.Value);
-                    foreach (var bone in pose.Static.Keys) FreeHStudioSceneLoader.Logger.LogInfo($"KKPE saved bone edit: {pose.Name}:{bone.name}");
+                    if (info != null) pose.LoadXml(info);
+                    foreach (var bone in pose.Static.Keys) FreeHStudioSceneLoader.Logger.LogDebug($"KKPE saved bone edit: {pose.Name}:{bone.name}");
                     // CharaPoseController.optimizeIK (on unless saved off)
                     bool optimizeIK = info?.Attributes?["optimizeIK"] == null || XmlConvert.ToBoolean(info.Attributes["optimizeIK"].Value);
-                    if (optimizeIK && pose.Enabled && FreeHStudioSceneLoader.KkpeOptimizeIK.Value) pose.OptimizeIK = true;
+                    if (optimizeIK && pose.Enabled) pose.OptimizeIK();
                 }
                 catch (Exception ex)
                 {
@@ -546,7 +522,7 @@ namespace KKS_FreeHStudioSceneLoader
                 }
             }
 
-            if (string.IsNullOrEmpty(sceneXml) || !FreeHStudioSceneLoader.KkpeItems.Value) return;
+            if (string.IsNullOrEmpty(sceneXml)) return;
             try
             {
                 var doc = new XmlDocument();
@@ -573,7 +549,7 @@ namespace KKS_FreeHStudioSceneLoader
                         i++;
                     }
                     if (item?.guideObject?.transformTarget != null)
-                        GetPose(item).LoadXml(node, true, FreeHStudioSceneLoader.KkpeBlendShapes.Value);
+                        GetPose(item).LoadXml(node);
                 }
             }
             catch (Exception ex)
@@ -590,15 +566,6 @@ namespace KKS_FreeHStudioSceneLoader
                 public Vector3? Position;
                 public Quaternion? Rotation;
                 public Vector3? Scale;
-                /// <summary>Diagnostics switch in the H window.</summary>
-                public bool On = true;
-            }
-
-            private struct Original
-            {
-                public Vector3 Position;
-                public Quaternion Rotation;
-                public Vector3 Scale;
             }
 
             public readonly Transform Root;
@@ -609,14 +576,7 @@ namespace KKS_FreeHStudioSceneLoader
             /// <summary>Edits saved in the card/scene, and the ones Timeline animates (applied after them).</summary>
             internal readonly Dictionary<Transform, BoneOverride> Static = new Dictionary<Transform, BoneOverride>();
             internal readonly Dictionary<Transform, BoneOverride> Animated = new Dictionary<Transform, BoneOverride>();
-            private readonly Dictionary<Transform, Original> _originals = new Dictionary<Transform, Original>();
             private BlendData _blend;
-
-            // Diagnostics switches in the H window
-            internal bool StaticOn = true;
-            internal bool AnimatedOn = true;
-            private bool _optimizeIK;
-            private float _spineStiffness, _pullBodyVertical;
 
             public PoseData(ObjectCtrlInfo oci, Transform root)
             {
@@ -629,10 +589,8 @@ namespace KKS_FreeHStudioSceneLoader
 
             internal BlendData Blend => _blend ?? (_blend = new BlendData(Root, _oci is OCIChar chara && chara.sex == 1));
 
-            private BoneOverride Get(Dictionary<Transform, BoneOverride> set, Transform bone)
+            private static BoneOverride Get(Dictionary<Transform, BoneOverride> set, Transform bone)
             {
-                if (!_originals.ContainsKey(bone))
-                    _originals[bone] = new Original { Position = bone.localPosition, Rotation = bone.localRotation, Scale = bone.localScale };
                 if (!set.TryGetValue(bone, out var data)) set[bone] = data = new BoneOverride();
                 return data;
             }
@@ -652,58 +610,22 @@ namespace KKS_FreeHStudioSceneLoader
             }
 
             /// <summary>CharaPoseController.optimizeIK: a looser spine for the full body IK.</summary>
-            internal bool OptimizeIK
+            internal void OptimizeIK()
             {
-                get => _optimizeIK;
-                set
-                {
-                    if (!(_oci is OCIChar chara) || chara.finalIK == null || value == _optimizeIK) return;
-                    var solver = chara.finalIK.solver;
-                    if (value)
-                    {
-                        _spineStiffness = solver.spineStiffness;
-                        _pullBodyVertical = solver.pullBodyVertical;
-                        solver.spineStiffness = 0f;
-                        solver.pullBodyVertical = 0f;
-                    }
-                    else
-                    {
-                        solver.spineStiffness = _spineStiffness;
-                        solver.pullBodyVertical = _pullBodyVertical;
-                    }
-                    _optimizeIK = value;
-                }
+                if (!(_oci is OCIChar chara) || chara.finalIK == null) return;
+                chara.finalIK.solver.spineStiffness = 0f;
+                chara.finalIK.solver.pullBodyVertical = 0f;
             }
 
-            /// <summary>Puts the bones back as they were before KKPE (switched off in the H window).</summary>
-            internal void Restore(Transform bone)
-            {
-                if (bone == null || !_originals.TryGetValue(bone, out var o)) return;
-                bone.localPosition = o.Position;
-                bone.localRotation = o.Rotation;
-                bone.localScale = o.Scale;
-            }
-
-            internal void RestoreAll()
-            {
-                foreach (var bone in _originals.Keys.ToList()) Restore(bone);
-            }
-
-            public void LoadXml(XmlNode node, bool bones, bool blendShapes)
+            public void LoadXml(XmlNode node)
             {
                 if (node.Attributes?["enabled"] != null) _enabled = XmlConvert.ToBoolean(node.Attributes["enabled"].Value);
                 var objects = node.SelectSingleNode("advancedObjects");
-                if (objects != null && bones)
+                if (objects != null)
                 {
                     foreach (XmlNode o in objects.ChildNodes)
                     {
                         if (o.Name != "object" || o.Attributes["name"] == null) continue;
-                        var key = $"{Name}:{o.Attributes["name"].Value}";
-                        if (SkipTexts.Any(t => t.EndsWith("$") ? key.EndsWith(t.Substring(0, t.Length - 1)) : key.Contains(t)))
-                        {
-                            FreeHStudioSceneLoader.Logger.LogInfo($"KKPE saved bone edit skipped (diagnostics): {key}");
-                            continue;
-                        }
                         var bone = Root.Find(o.Attributes["name"].Value);
                         if (bone == null) continue;
                         if (o.Attributes["posX"] != null) Get(Static, bone).Position = V3(o, "pos");
@@ -712,17 +634,14 @@ namespace KKS_FreeHStudioSceneLoader
                     }
                 }
                 var meshes = node.SelectSingleNode("skinnedMeshes");
-                if (meshes != null && blendShapes) Blend.LoadXml(meshes, _oci as OCIChar);
+                if (meshes != null) Blend.LoadXml(meshes, _oci as OCIChar);
             }
-
-            private static IEnumerable<string> SkipTexts =>
-                (FreeHStudioSceneLoader.KkpeSkipSavedBones.Value ?? "").Split(',').Select(t => t.Trim()).Where(t => t.Length > 0);
 
             private static void ApplySet(Dictionary<Transform, BoneOverride> set)
             {
                 foreach (var kv in set)
                 {
-                    if (kv.Key == null || !kv.Value.On) continue;
+                    if (kv.Key == null) continue;
                     if (kv.Value.Scale.HasValue) kv.Key.localScale = kv.Value.Scale.Value;
                     if (kv.Value.Rotation.HasValue) kv.Key.localRotation = kv.Value.Rotation.Value;
                     if (kv.Value.Position.HasValue) kv.Key.localPosition = kv.Value.Position.Value;
@@ -733,56 +652,17 @@ namespace KKS_FreeHStudioSceneLoader
             public void Apply()
             {
                 if (!_enabled) return;
-                if (StaticOn) ApplySet(Static);
-                if (AnimatedOn) ApplySet(Animated);
+                ApplySet(Static);
+                ApplySet(Animated);
                 _blend?.Apply();
-                if (Trace) TraceBones("after KKPE");
-            }
-
-            // Diagnostics: logs the bones that are edited both in the saved data and by Timeline
-            internal static bool Trace;
-
-            /// <summary>How far each hand is turned against its forearm, and the hand IK target (world, euler).</summary>
-            internal void TraceWrists()
-            {
-                if (!(_oci is OCIChar chara)) return;
-                foreach (var side in new[] { "L", "R" })
-                {
-                    var forearm = FindDescendant(Root, "cf_j_forearm01_" + side);
-                    var hand = FindDescendant(Root, "cf_j_hand_" + side);
-                    var target = FindDescendant(Root, "cf_t_hand_" + side + "(work)");
-                    if (forearm == null || hand == null) continue;
-                    var local = Quaternion.Inverse(forearm.rotation) * hand.rotation;
-                    FreeHStudioSceneLoader.Logger.LogInfo($"[trace {Time.frameCount} wrist] {Name} {side}: hand vs forearm {Quaternion.Angle(forearm.rotation, hand.rotation):F1} deg, local {local.eulerAngles}, " +
-                        $"target {(target != null ? target.rotation.eulerAngles.ToString() : "-")}, hand {hand.rotation.eulerAngles}");
-                }
-            }
-
-            internal void TraceBones(string when)
-            {
-                foreach (var kv in Static)
-                {
-                    if (kv.Key == null || !kv.Value.Rotation.HasValue) continue;
-                    Animated.TryGetValue(kv.Key, out var anim);
-                    FreeHStudioSceneLoader.Logger.LogInfo($"[trace {Time.frameCount} {when}] {Name}:{kv.Key.name} saved {kv.Value.Rotation.Value.eulerAngles} " +
-                        $"timeline {(anim?.Rotation.HasValue == true ? anim.Rotation.Value.eulerAngles.ToString() : "-")} now {kv.Key.localRotation.eulerAngles}");
-                }
             }
         }
-
-        // Diagnostics (H window): switch parts of the reproduction off to compare with Studio
-        internal IEnumerable<PoseData> Poses => _poses.Values.Where(p => p.Enabled);
-        internal bool ConstraintsOn = true;
-        internal bool LateBeforeIK;
-        internal int ConstraintCount => _constraints.Count;
 
         /// <summary>The folders and items that constraints link the given objects to (the parent end).</summary>
         internal List<ObjectCtrlInfo> LinkedParents(ICollection<ObjectCtrlInfo> children) =>
             _constraints.Where(c => c.enabled && c.childObject != null && children.Contains(c.childObject) &&
                                     c.parentObject != null && !(c.parentObject is OCIChar) && !children.Contains(c.parentObject))
                 .Select(c => c.parentObject).Distinct().ToList();
-
-        internal static string BoneName(Transform bone) => bone == null ? "(none)" : bone.name;
 
         private static readonly string[] LinkSuffixKeys = { "L", "R", "CL", "OP", "HALF" };
 

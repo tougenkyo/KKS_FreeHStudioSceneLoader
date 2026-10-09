@@ -215,6 +215,7 @@ namespace KKS_FreeHStudioSceneLoader
             studioMapNo = -1;
             EnsureCreated();
             DiscardSceneData();
+            MissingMods.Clear();
             var sceneInfo = new SceneInfo();
             Singleton<Studio.Studio>.Instance.sceneInfo = sceneInfo;
             IsLoadingScene = true;
@@ -355,10 +356,10 @@ namespace KKS_FreeHStudioSceneLoader
                 // Everything else that is not placed here (cameras, texts, characters turned off) exists there.
                 if (!loaded && info.kind == 1 && (entry.Value == null || placed.ContainsKey(entry.Value.dicKey)))
                 {
-                    FreeHStudioSceneLoader.Logger.LogInfo($"Studio object (not counted, failed to load): {Describe(info)}");
+                    FreeHStudioSceneLoader.Logger.LogDebug($"Studio object (not counted, failed to load): {Describe(info)}");
                     continue;
                 }
-                FreeHStudioSceneLoader.Logger.LogInfo($"Studio object {objects.Count}: {Describe(info)}{(loaded ? "" : " (not placed)")}");
+                FreeHStudioSceneLoader.Logger.LogDebug($"Studio object {objects.Count}: {Describe(info)}{(loaded ? "" : " (not placed)")}");
                 objects.Add(loaded ? oci : null);
                 isItem.Add(info.kind == 1);
             }
@@ -505,6 +506,13 @@ namespace KKS_FreeHStudioSceneLoader
         {
             if (Settings == null || Settings.FreeHMap == no) return;
             Settings.FreeHMap = no;
+            SaveSettings();
+        }
+
+        internal static void SetMatchTime(bool on)
+        {
+            if (Settings == null || Settings.MatchTime == on) return;
+            Settings.MatchTime = on;
             SaveSettings();
         }
 
@@ -668,6 +676,54 @@ namespace KKS_FreeHStudioSceneLoader
             if (loaded > 0)
                 FreeHStudioSceneLoader.Logger.LogMessage($"スタジオシーンのキャラクター: {FreeHStudioSceneLoader.WindowKey.Value} キーで表示の切り替えと位置の調整ができます");
         }
+
+        #region Missing mods of the scene
+
+        internal class MissingMod
+        {
+            public string Guid, Name, Author, Website;
+            /// <summary>How many times Sideloader reported it (about one per item, character part, etc.).</summary>
+            public int Count;
+        }
+
+        /// <summary>The mods Sideloader could not find while the current scene was read, in the order first reported.</summary>
+        internal static readonly List<MissingMod> MissingMods = new List<MissingMod>();
+
+        /// <summary>
+        /// Postfix of Sideloader's UniversalAutoResolver.ShowGUIDError, which Sideloader calls for every object of a
+        /// card or scene that needs a mod that is not installed (the "Missing mod detected!" warnings).
+        /// </summary>
+        internal static void OnMissingMod(string guid, string author, string website, string name)
+        {
+            if (!IsLoadingScene) return;
+            var mod = MissingMods.FirstOrDefault(m => m.Guid == guid);
+            if (mod == null) MissingMods.Add(mod = new MissingMod { Guid = guid, Name = name, Author = author, Website = website });
+            mod.Count++;
+        }
+
+        /// <summary>The missing mods as text to paste somewhere (a list to look the mods up with).</summary>
+        internal static string MissingModsText(string scenePath)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"Scene: {System.IO.Path.GetFileName(scenePath)}");
+            if (MissingMods.Count == 0)
+            {
+                sb.AppendLine("Missing mods: none");
+                return sb.ToString();
+            }
+            sb.AppendLine($"Missing mods: {MissingMods.Count}");
+            foreach (var m in MissingMods.OrderByDescending(m => m.Count))
+            {
+                sb.Append($"- {(string.IsNullOrEmpty(m.Name) ? m.Guid : m.Name)} (GUID: {m.Guid})");
+                if (!string.IsNullOrEmpty(m.Author)) sb.Append($" by {m.Author}");
+                sb.Append($", used {m.Count} times");
+                if (!string.IsNullOrEmpty(m.Website)) sb.Append($", {m.Website}");
+                sb.AppendLine();
+            }
+            return sb.ToString();
+        }
+
+        #endregion
 
         #region Settings of the scene (saved per scene file)
 
