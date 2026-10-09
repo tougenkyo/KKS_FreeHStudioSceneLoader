@@ -22,7 +22,7 @@ Output: `bin/Release/KKS_FreeHStudioSceneLoader.dll` → copy to `BepInEx/plugin
 
 ## Usage
 1. Open Free H, click the 「スタジオシーンを選ぶ」 button or press **F7** on the selection screen (both configurable).
-2. Wait for the studio lists to load (first time only), pick a scene from `UserData/studio/scene`, click 「このシーンを使う」.
+2. Wait for the studio lists to load (first time only), pick a scene from `UserData/studio/scene`, click it (this sets it for H; 「解除」 goes back to the normal map).
 3. The Free H map is switched to the scene's base map; start H as usual. Items, folders and lights from the scene are placed on the map.
 
 In the selection window, after choosing a scene:

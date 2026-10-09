@@ -44,6 +44,7 @@ namespace KKS_FreeHStudioSceneLoader
                 else
                 {
                     Selection.Clear();
+                    Selection.ForgetMapBefore();
                     return;
                 }
             }

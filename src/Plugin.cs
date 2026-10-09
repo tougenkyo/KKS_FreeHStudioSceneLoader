@@ -21,7 +21,7 @@ namespace KKS_FreeHStudioSceneLoader
     {
         public const string GUID = "local.kks.freehstudiosceneloader";
         public const string PluginName = "Free H Studio Scene Loader (KKS port, experimental)";
-        public const string Version = "0.4.13";
+        public const string Version = "0.4.15";
 
         internal static new ManualLogSource Logger;
         internal static FreeHStudioSceneLoader Instance;
@@ -206,7 +206,7 @@ namespace KKS_FreeHStudioSceneLoader
                 _files = null;
                 StudioHost.EnsureCreated();
                 // Show the scene whose details are loaded; a preview left from before (its data was discarded when the
-                // Free H screen restarted) would keep 「このシーンを使う」 disabled
+                // Free H screen restarted) would look chosen while nothing is set
                 if (Selection.PreviewPath != null && _previewPath != Selection.PreviewPath) SetPreview(Selection.PreviewPath);
                 else if (Selection.PreviewPath == null && _previewPath != null) ClearPreview();
             }
@@ -216,6 +216,7 @@ namespace KKS_FreeHStudioSceneLoader
         {
             _freeH = freeH;
             Selection.Clear();
+            Selection.ForgetMapBefore();
             ClearPreview();
             _status = "";
             var path = Selection.ReturnScenePath;
@@ -241,10 +242,7 @@ namespace KKS_FreeHStudioSceneLoader
                 yield break;
             try
             {
-                SetPreview(path);
-                _status = Selection.Preview(freeH, path) ?? "";
-                if (Selection.PreviewPath == path)
-                    _status = Selection.Use(freeH);
+                ChooseScene(path);
                 Logger.LogMessage(Selection.IsSelected
                     ? $"スタジオシーン「{Path.GetFileNameWithoutExtension(path)}」をもう一度セットしました（{WindowKey.Value} キーで変更できます）"
                     : $"スタジオシーン「{Path.GetFileNameWithoutExtension(path)}」をもう一度セットできませんでした: {_status}");
@@ -411,11 +409,9 @@ namespace KKS_FreeHStudioSceneLoader
                 var rel = (SceneFile.IsKoikatsuFormat(f) ? "[KK] " : "[KKS] ") + f.Substring(SceneRoot.Length).TrimStart('\\', '/');
                 if (_filter.Length > 0 && rel.IndexOf(_filter, StringComparison.OrdinalIgnoreCase) < 0) continue;
                 var style = f == _previewPath ? GUI.skin.box : GUI.skin.button;
-                if (GUILayout.Button(rel, style, GUILayout.Width(ListColumnWidth - 30)) && (f != _previewPath || Selection.PreviewPath != f))
-                {
-                    SetPreview(f);
-                    _status = Selection.Preview(_freeH, f);
-                }
+                // Clicking a scene reads it and sets it for H (clicking it again after 解除 sets it again)
+                if (GUILayout.Button(rel, style, GUILayout.Width(ListColumnWidth - 30)) && (f != _previewPath || Selection.PreviewPath != f || Selection.ScenePath != f))
+                    ChooseScene(f);
             }
             GUILayout.EndScrollView();
 
@@ -424,20 +420,25 @@ namespace KKS_FreeHStudioSceneLoader
             if (_preview != null)
                 GUI.DrawTexture(previewRect, _preview, ScaleMode.ScaleToFit);
 
-            GUILayout.BeginHorizontal();
-            GUI.enabled = _previewPath != null && Selection.PreviewPath == _previewPath && Selection.ScenePath != _previewPath;
-            if (GUILayout.Button("このシーンを使う"))
-                _status = Selection.Use(_freeH);
+            GUILayout.Label(_status);
+            GUILayout.FlexibleSpace();
             GUI.enabled = Selection.IsSelected;
-            if (GUILayout.Button("解除"))
+            if (GUILayout.Button("解除（通常のマップでHをする）", GUILayout.ExpandWidth(false)))
             {
-                Selection.Unset();
-                _status = "解除しました。通常のマップを使います。";
+                Selection.Unset(_freeH);
+                _status = "解除しました。通常のマップを使います。もう一度シーンをクリックするとセットします。";
             }
             GUI.enabled = true;
-            GUILayout.EndHorizontal();
+        }
 
-            GUILayout.Label(_status);
+        private void ChooseScene(string path)
+        {
+            if (path != _previewPath) SetPreview(path);
+            _status = Selection.Preview(_freeH, path) ?? "";
+            if (Selection.PreviewPath == path && StudioHost.HasSceneData)
+                _status = Selection.Use(_freeH);
+            // A scene that could not be set leaves nothing set: show the normal map again
+            if (!Selection.IsSelected) Selection.ShowNormalMap(_freeH);
         }
 
         /// <summary>Right column: the settings of the chosen scene (saved per scene).</summary>
@@ -445,11 +446,11 @@ namespace KKS_FreeHStudioSceneLoader
         {
             if (Selection.PreviewPath == null || !StudioHost.HasSceneData)
             {
-                GUILayout.Label("左の一覧でシーンをクリックすると、ここにシーンの詳細と設定（土台のマップ、時間帯、キャラクター、音）が出ます。設定はシーンごとに保存します。「このシーンを使う」でフリーHにセットします。");
+                GUILayout.Label("左の一覧でシーンをクリックすると、フリーHにセットして、ここにシーンの詳細と設定（土台のマップ、時間帯、キャラクター、音）を出します。設定はシーンごとに保存します。");
                 return;
             }
             GUILayout.Label($"シーン: {Path.GetFileNameWithoutExtension(Selection.PreviewPath)}");
-            GUILayout.Label(Selection.ScenePath == Selection.PreviewPath ? "状態: セット済み（このシーンでHを始めます）" : "状態: 未セット（「このシーンを使う」でセットします）");
+            GUILayout.Label(Selection.ScenePath == Selection.PreviewPath ? "状態: セット済み（このシーンでHを始めます）" : "状態: 未セット（左の一覧でもう一度クリックするとセットします）");
             GUILayout.Label(Selection.MapDescription);
             DrawMissingMods();
             if (!Selection.NoMap && Selection.Candidates.Count > 1)
@@ -824,12 +825,12 @@ namespace KKS_FreeHStudioSceneLoader
             if (studioMapNo < 0)
             {
                 NoMap = true;
-                return prefix + "「このシーンを使う」でフリーHにセットします。";
+                return prefix;
             }
             Candidates = StudioHost.FindFreeHMaps(freeH.member.map, studioMapNo, out _error, out _approximate);
             if (Candidates.Count == 0) return prefix + _error;
             MapNo = Candidates[0].No;
-            return prefix + "「このシーンを使う」でフリーHにセットします。";
+            return prefix;
         }
 
         /// <summary>The base map line of the details.</summary>
@@ -854,6 +855,7 @@ namespace KKS_FreeHStudioSceneLoader
             var param = Candidates.FirstOrDefault(c => c.No == MapNo);
             if (param == null) return _error ?? "このシーンに使えるフリーHのマップがありません。";
 
+            RememberMap(freeH);
             ScenePath = PreviewPath;
             // Setting the result map makes the game load this map (and its H points) when H starts
             freeH.member.resultMapInfo.Value = param;
@@ -872,7 +874,8 @@ namespace KKS_FreeHStudioSceneLoader
         {
             var param = freeH.member.resultMapInfo.Value;
             if (param == null || !param.isFreeH)
-                return "このシーンには土台のマップがありません。先に通常のマップ選択で、H位置に使うマップを選んでから、もう一度押してください。";
+                return "このシーンには土台のマップがありません。先に通常のマップ選択で、H位置に使うマップを選んでから、もう一度シーンをクリックしてください。";
+            RememberMap(freeH);
             ScenePath = PreviewPath;
             MapNo = param.No;
             BaseMapName = param.DisplayName;
@@ -884,11 +887,48 @@ namespace KKS_FreeHStudioSceneLoader
                    "\nシーンは、シーン内の女の子の位置がHの開始位置に来るように置きます。通常のマップ選択で別のマップを選ぶと、H位置だけ変わります。";
         }
 
-        /// <summary>Stops using the scene for H; its details stay shown.</summary>
-        internal static void Unset()
+        /// <summary>Stops using the scene for H (its details stay shown) and shows the normal map again.</summary>
+        internal static void Unset(FreeHScene freeH)
         {
             ScenePath = null;
             BaseMapName = null;
+            ShowNormalMap(freeH);
+        }
+
+        /// <summary>
+        /// The Free H map chosen before a scene was set (a scene with a studio map switches to its base map), to go
+        /// back to when no scene is set any more. Null when the map in use is the player's own choice.
+        /// </summary>
+        private static MapInfo.Param _mapBefore;
+
+        private static void RememberMap(FreeHScene freeH)
+        {
+            if (_mapBefore == null) _mapBefore = freeH.member.resultMapInfo.Value;
+        }
+
+        /// <summary>The map now in use is the one chosen in the normal map selection.</summary>
+        internal static void ForgetMapBefore() => _mapBefore = null;
+
+        /// <summary>Puts back the map chosen before the scene, with its own thumbnail and name.</summary>
+        internal static void ShowNormalMap(FreeHScene freeH)
+        {
+            if (freeH == null || IsSelected) return;
+            var current = freeH.member.resultMapInfo.Value;
+            var map = _mapBefore ?? current;
+            _mapBefore = null;
+            if (map == null) return;
+            try
+            {
+                if (map != current)
+                    freeH.member.resultMapInfo.Value = map; // the game shows its thumbnail (SetMapSprite)
+                else
+                    freeH.SetMapSprite(map);
+                FreeHStudioSceneLoader.Logger.LogInfo($"Studio scene unset, Free H map {map.No} ({map.MapName})");
+            }
+            catch (Exception ex)
+            {
+                FreeHStudioSceneLoader.Logger.LogWarning($"Could not show the Free H map again: {ex.Message}");
+            }
         }
 
         /// <summary>
@@ -931,6 +971,7 @@ namespace KKS_FreeHStudioSceneLoader
 
         internal static void ChangeBaseMap(MapInfo.Param param)
         {
+            ForgetMapBefore();
             MapNo = param.No;
             BaseMapName = param.DisplayName;
             FreeHStudioSceneLoader.Logger.LogInfo($"H positions for the studio scene now from Free H map {param.No} ({param.MapName})");
