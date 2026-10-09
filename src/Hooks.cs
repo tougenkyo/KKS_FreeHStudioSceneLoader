@@ -153,6 +153,24 @@ namespace KKS_FreeHStudioSceneLoader
             }
         }
 
+        // The game's cameras read the mouse directly: dragging a plugin window (or scrolling its list) also turned
+        // or zoomed the view. Keep them still while the mouse is on a plugin window or was pressed there.
+        [HarmonyPrefix, HarmonyPatch(typeof(BaseCameraControl_Ver2), "InputMouseProc")]
+        private static bool BaseCameraControl_Ver2_InputMouseProc(ref bool __result)
+        {
+            if (!FreeHStudioSceneLoader.MouseOnPluginWindow) return true;
+            __result = false;
+            return false;
+        }
+
+        [HarmonyPrefix, HarmonyPatch(typeof(BaseCameraControl_Ver2), "InputMouseWheelZoomProc")]
+        private static bool BaseCameraControl_Ver2_InputMouseWheelZoomProc(ref bool __result)
+        {
+            if (!FreeHStudioSceneLoader.MouseOnPluginWindow) return true;
+            __result = false;
+            return false;
+        }
+
         [HarmonyPrefix, HarmonyPatch(typeof(HSceneProc), nameof(HSceneProc.OnDestroy))]
         private static void HSceneProc_OnDestroy()
         {

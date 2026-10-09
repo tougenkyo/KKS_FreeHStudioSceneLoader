@@ -21,7 +21,7 @@ namespace KKS_FreeHStudioSceneLoader
     {
         public const string GUID = "local.kks.freehstudiosceneloader";
         public const string PluginName = "Free H Studio Scene Loader (KKS port, experimental)";
-        public const string Version = "0.5.6";
+        public const string Version = "0.5.9";
 
         internal static new ManualLogSource Logger;
         internal static FreeHStudioSceneLoader Instance;
@@ -188,6 +188,7 @@ namespace KKS_FreeHStudioSceneLoader
         private void Update()
         {
             ScanCardFiles();
+            UpdateMouseCapture();
             if (_freeH == null)
             {
                 _showWindow = false;
@@ -270,7 +271,39 @@ namespace KKS_FreeHStudioSceneLoader
             bool repaint = Event.current.type == EventType.Repaint;
             if (repaint) _blockRects.Clear();
             DrawGui();
-            if (repaint) GuiBlocker.SetRects(_blockRects);
+            if (repaint)
+            {
+                GuiBlocker.SetRects(_blockRects);
+                _windowRects.Clear();
+                _windowRects.AddRange(_blockRects);
+            }
+        }
+
+        private readonly List<Rect> _windowRects = new List<Rect>();
+        private bool _mouseCaptured;
+
+        /// <summary>
+        /// The mouse is over one of the plugin's windows or buttons, or a button was pressed there and is still held
+        /// (dragging a window, a slider). The game's camera reads the mouse directly (BaseCameraControl_Ver2), not
+        /// through the UI, so it is kept still then (see Hooks).
+        /// </summary>
+        internal static bool MouseOnPluginWindow => Instance != null && (Instance._mouseCaptured || Instance.MouseOverWindow());
+
+        private bool MouseOverWindow()
+        {
+            var mouse = Input.mousePosition;
+            var point = new Vector2(mouse.x, Screen.height - mouse.y);
+            foreach (var r in _windowRects)
+                if (r.Contains(point)) return true;
+            return false;
+        }
+
+        private void UpdateMouseCapture()
+        {
+            bool down = Input.GetMouseButtonDown(0) || Input.GetMouseButtonDown(1) || Input.GetMouseButtonDown(2);
+            bool held = Input.GetMouseButton(0) || Input.GetMouseButton(1) || Input.GetMouseButton(2);
+            if (down && MouseOverWindow()) _mouseCaptured = true;
+            else if (!held) _mouseCaptured = false;
         }
 
         private void DrawGui()
@@ -285,7 +318,7 @@ namespace KKS_FreeHStudioSceneLoader
                 }
                 if (_showCharaWindow)
                 {
-                    _charaWindowRect = KeepOnScreen(GUILayout.Window(GUID.GetHashCode() + 1, _charaWindowRect, DrawCharaWindow, "スタジオシーンのキャラクター", WindowStyle, GUILayout.Width(440)));
+                    _charaWindowRect = KeepOnScreen(GUILayout.Window(GUID.GetHashCode() + 1, _charaWindowRect, DrawCharaWindow, "スタジオシーンのキャラクター", WindowStyle, GUILayout.Width(CharaWindowWidth + ScrollbarWidth)));
                     _blockRects.Add(_charaWindowRect);
                 }
                 else _cardTarget = null;
@@ -1028,6 +1061,12 @@ namespace KKS_FreeHStudioSceneLoader
             if (_selectedChara == null || !placed.Contains(_selectedChara)) _selectedChara = placed.FirstOrDefault();
 
             if (CloseButton(_charaWindowRect)) _showCharaWindow = false;
+            // Taller than the screen: the content scrolls instead of the window running off the screen. The view is as
+            // tall as the content (measured on the last repaint), the width as before plus the scrollbar.
+            float maxHeight = Mathf.Max(200f, Screen.height - 60f);
+            _charaWindowScroll = GUILayout.BeginScrollView(_charaWindowScroll, false, false, GUIStyle.none, GUI.skin.verticalScrollbar,
+                GUILayout.Height(Mathf.Min(_charaContentHeight + 4f, maxHeight)));
+            GUILayout.BeginVertical(GUILayout.Width(CharaWindowWidth - WindowStyle.padding.horizontal));
             GUILayout.Label($"表示のオンオフと、位置の調整ができます（{WindowKey.Value} キーで閉じる）");
             _charaScroll = GUILayout.BeginScrollView(_charaScroll, GUILayout.Height(Mathf.Min(placed.Count, 6) * 26 + 8));
             foreach (var chara in placed)
@@ -1139,8 +1178,16 @@ namespace KKS_FreeHStudioSceneLoader
             DrawLayoutSlots();
             GUILayout.Label("音（シーンごとに保存します）:");
             DrawSoundChoice();
+            GUILayout.EndVertical();
+            if (Event.current.type == EventType.Repaint) _charaContentHeight = GUILayoutUtility.GetLastRect().height;
+            GUILayout.EndScrollView();
             GUI.DragWindow();
         }
+
+        private Vector2 _charaWindowScroll;
+        private float _charaContentHeight = 400f;
+        private const float CharaWindowWidth = 490f;
+        private const float ScrollbarWidth = 18f;
 
         private string _layoutStatus;
 
