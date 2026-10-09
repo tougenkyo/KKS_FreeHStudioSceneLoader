@@ -21,7 +21,7 @@ namespace KKS_FreeHStudioSceneLoader
     {
         public const string GUID = "local.kks.freehstudiosceneloader";
         public const string PluginName = "Free H Studio Scene Loader (KKS port, experimental)";
-        public const string Version = "0.4.16";
+        public const string Version = "0.4.18";
 
         internal static new ManualLogSource Logger;
         internal static FreeHStudioSceneLoader Instance;
@@ -38,6 +38,7 @@ namespace KKS_FreeHStudioSceneLoader
         internal static ConfigEntry<bool> PlayCharaVoices;
         internal static ConfigEntry<bool> MatchTimeOfDay;
         internal static ConfigEntry<bool> ShowButtonInH;
+        internal static ConfigEntry<bool> ShowThumbnails;
         internal static ConfigEntry<float> WindowOpacity;
         internal static ConfigEntry<Vector2> ButtonInHPosition;
         internal static ConfigEntry<bool> HideBaseMap;
@@ -91,6 +92,8 @@ namespace KKS_FreeHStudioSceneLoader
                 "Position of the button as a fraction of the screen size (x: 0 = left, 1 = right; y: 0 = top, 1 = bottom).");
             WindowOpacity = Config.Bind("Button", "Window background opacity", 0.85f,
                 new ConfigDescription("Opacity of the dark background of the plugin's windows (0 = transparent, 1 = opaque).", new AcceptableValueRange<float>(0.3f, 1f)));
+            ShowThumbnails = Config.Bind("Button", "Show scene thumbnails", true,
+                "Show the scene list as thumbnails (3 per row) instead of file names. Also switched with the checkbox next to 解除.");
             ShowButtonInH = Config.Bind("Button", "Show button in H", true,
                 "During H, show a button that opens the window for the scene's characters (same as the key).");
             ButtonInHPosition = Config.Bind("Button", "Button in H position", new Vector2(0.5f, 0.01f),
@@ -192,8 +195,9 @@ namespace KKS_FreeHStudioSceneLoader
                 else if (WindowKey.Value.IsDown()) _showCharaWindow = !_showCharaWindow;
                 return;
             }
-            if (_reloadRequested) { _files = null; _reloadRequested = false; }
+            if (_reloadRequested) { _files = null; _reloadRequested = false; ClearThumbnails(); }
             if (_showWindow) ScanSceneFiles();
+            if (_showWindow) LoadWantedThumbnails();
             if (WindowKey.Value.IsDown())
                 ToggleWindow();
         }
@@ -403,25 +407,35 @@ namespace KKS_FreeHStudioSceneLoader
             else
                 GUILayout.Label($"シーン: {_files.Count} 件　[KK] は無印コイカツ形式（読み込めないものがあります）");
 
-            _scroll = GUILayout.BeginScrollView(_scroll, GUILayout.Height(300));
-            foreach (var f in _files.ToArray())
+            _scroll = GUILayout.BeginScrollView(_scroll, GUILayout.Height(CurrentListHeight));
+            if (ShowThumbnails.Value)
+                DrawThumbnailGrid();
+            else
             {
-                var rel = (SceneFile.IsKoikatsuFormat(f) ? "[KK] " : "[KKS] ") + f.Substring(SceneRoot.Length).TrimStart('\\', '/');
-                if (_filter.Length > 0 && rel.IndexOf(_filter, StringComparison.OrdinalIgnoreCase) < 0) continue;
-                var style = f == _previewPath ? GUI.skin.box : GUI.skin.button;
-                // Clicking a scene reads it and sets it for H (clicking it again after 解除 sets it again)
-                if (GUILayout.Button(rel, style, GUILayout.Width(ListColumnWidth - 30)) && (f != _previewPath || Selection.PreviewPath != f || Selection.ScenePath != f))
-                    ChooseScene(f);
+                foreach (var f in _files.ToArray())
+                {
+                    var rel = ListName(f);
+                    if (_filter.Length > 0 && rel.IndexOf(_filter, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                    var style = f == _previewPath ? GUI.skin.box : GUI.skin.button;
+                    // Clicking a scene reads it and sets it for H (clicking it again after 解除 sets it again)
+                    if (GUILayout.Button(rel, style, GUILayout.Width(ListColumnWidth - 30)) && (f != _previewPath || Selection.PreviewPath != f || Selection.ScenePath != f))
+                        ChooseScene(f);
+                }
             }
             GUILayout.EndScrollView();
 
+            // The name list shows the chosen scene's image below it; the thumbnails take that space instead.
             // Fixed size so the window does not grow to the texture size
-            var previewRect = GUILayoutUtility.GetRect(ListColumnWidth, 180, GUILayout.Width(ListColumnWidth), GUILayout.Height(180));
-            if (_preview != null)
-                GUI.DrawTexture(previewRect, _preview, ScaleMode.ScaleToFit);
+            if (!ShowThumbnails.Value)
+            {
+                var previewRect = GUILayoutUtility.GetRect(ListColumnWidth, PreviewHeight, GUILayout.Width(ListColumnWidth), GUILayout.Height(PreviewHeight));
+                if (_preview != null)
+                    GUI.DrawTexture(previewRect, _preview, ScaleMode.ScaleToFit);
+            }
 
             GUILayout.Label(_status);
             GUILayout.FlexibleSpace();
+            GUILayout.BeginHorizontal();
             GUI.enabled = Selection.IsSelected;
             if (GUILayout.Button("解除（通常のマップでHをする）", GUILayout.ExpandWidth(false)))
             {
@@ -429,7 +443,133 @@ namespace KKS_FreeHStudioSceneLoader
                 _status = "解除しました。通常のマップを使います。もう一度シーンをクリックするとセットします。";
             }
             GUI.enabled = true;
+            GUILayout.Space(12);
+            var thumbs = GUILayout.Toggle(ShowThumbnails.Value, "サムネイルで表示", GUILayout.ExpandWidth(false));
+            if (thumbs != ShowThumbnails.Value) ShowThumbnails.Value = thumbs;
+            GUILayout.EndHorizontal();
         }
+
+        private const float ListHeight = 300f;
+        private const float PreviewHeight = 180f;
+        private float CurrentListHeight => ShowThumbnails.Value ? ListHeight + PreviewHeight + 4f : ListHeight;
+
+        private string ListName(string path) =>
+            (SceneFile.IsKoikatsuFormat(path) ? "[KK] " : "[KKS] ") + path.Substring(SceneRoot.Length).TrimStart('\\', '/');
+
+        #region Scene thumbnails
+
+        private const int ThumbColumns = 3;
+        private const float ThumbGap = 4f;
+        private const float ThumbLabelHeight = 18f;
+        /// <summary>Loaded thumbnails are kept up to this many (least recently shown dropped first).</summary>
+        private const int MaxThumbnails = 150;
+        private readonly Dictionary<string, Texture2D> _thumbs = new Dictionary<string, Texture2D>();
+        private readonly LinkedList<string> _thumbOrder = new LinkedList<string>();
+        private readonly HashSet<string> _thumbFailed = new HashSet<string>();
+        private readonly List<string> _thumbWanted = new List<string>();
+        private GUIStyle _thumbLabelStyle;
+
+        /// <summary>
+        /// Three thumbnails per row, scaled to fit the list. Only the rows in view are drawn, and their images are
+        /// loaded a few per frame (in Update), so long lists stay quick.
+        /// </summary>
+        private void DrawThumbnailGrid()
+        {
+            if (_thumbLabelStyle == null)
+                _thumbLabelStyle = new GUIStyle(GUI.skin.label) { fontSize = 11, alignment = TextAnchor.UpperCenter, wordWrap = false, clipping = TextClipping.Clip };
+            var files = _files.Where(f => _filter.Length == 0 || ListName(f).IndexOf(_filter, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+            float width = ListColumnWidth - 30f;
+            float cellW = (width - ThumbGap * (ThumbColumns - 1)) / ThumbColumns;
+            float imageH = cellW * 9f / 16f;
+            float cellH = imageH + ThumbLabelHeight + ThumbGap;
+            int rows = (files.Count + ThumbColumns - 1) / ThumbColumns;
+            var area = GUILayoutUtility.GetRect(width, rows * cellH, GUILayout.Width(width), GUILayout.Height(rows * cellH));
+            if (Event.current.type == EventType.Repaint) _thumbWanted.Clear();
+            int firstRow = Mathf.Max(0, Mathf.FloorToInt(_scroll.y / cellH));
+            int lastRow = Mathf.Min(rows - 1, Mathf.CeilToInt((_scroll.y + CurrentListHeight) / cellH));
+            for (int row = firstRow; row <= lastRow; row++)
+            {
+                for (int col = 0; col < ThumbColumns; col++)
+                {
+                    int index = row * ThumbColumns + col;
+                    if (index >= files.Count) break;
+                    var f = files[index];
+                    var cell = new Rect(area.x + col * (cellW + ThumbGap), area.y + row * cellH, cellW, imageH + ThumbLabelHeight);
+                    bool chosen = f == _previewPath;
+                    if (GUI.Button(cell, GUIContent.none) && (f != _previewPath || Selection.PreviewPath != f || Selection.ScenePath != f))
+                        ChooseScene(f);
+                    if (chosen && Event.current.type == EventType.Repaint) DrawFrame(cell, ChosenFrameColor, 3f);
+                    var imageRect = new Rect(cell.x + 2, cell.y + 2, cell.width - 4, imageH - 4);
+                    if (_thumbs.TryGetValue(f, out var tex) && tex != null)
+                    {
+                        if (Event.current.type == EventType.Repaint) GUI.DrawTexture(imageRect, tex, ScaleMode.ScaleToFit);
+                    }
+                    else if (!_thumbFailed.Contains(f) && Event.current.type == EventType.Repaint)
+                        _thumbWanted.Add(f);
+                    var name = (SceneFile.IsKoikatsuFormat(f) ? "[KK] " : "") + Path.GetFileNameWithoutExtension(f);
+                    GUI.Label(new Rect(cell.x, cell.y + imageH - 2, cell.width, ThumbLabelHeight), name, _thumbLabelStyle);
+                    if (chosen && Selection.ScenePath == f && Event.current.type == EventType.Repaint)
+                        GUI.Label(new Rect(cell.x + 4, cell.y + 2, cell.width, ThumbLabelHeight), "セット中", _thumbLabelStyle);
+                }
+            }
+        }
+
+        private static readonly Color ChosenFrameColor = new Color(1f, 0.55f, 0.55f, 1f);
+
+        private static void DrawFrame(Rect r, Color color, float thickness)
+        {
+            var old = GUI.color;
+            GUI.color = color;
+            GUI.DrawTexture(new Rect(r.x, r.y, r.width, thickness), Texture2D.whiteTexture);
+            GUI.DrawTexture(new Rect(r.x, r.yMax - thickness, r.width, thickness), Texture2D.whiteTexture);
+            GUI.DrawTexture(new Rect(r.x, r.y, thickness, r.height), Texture2D.whiteTexture);
+            GUI.DrawTexture(new Rect(r.xMax - thickness, r.y, thickness, r.height), Texture2D.whiteTexture);
+            GUI.color = old;
+        }
+
+        /// <summary>Loads a few of the thumbnails the list wants to show (called from Update).</summary>
+        private void LoadWantedThumbnails()
+        {
+            if (!ShowThumbnails.Value || _thumbWanted.Count == 0) return;
+            var until = Time.realtimeSinceStartup + 0.012f;
+            foreach (var path in _thumbWanted.ToList())
+            {
+                if (Time.realtimeSinceStartup > until) break;
+                _thumbWanted.Remove(path);
+                if (_thumbs.ContainsKey(path) || _thumbFailed.Contains(path)) continue;
+                try
+                {
+                    int w = 0, h = 0;
+                    var tex = PngAssist.ChangeTextureFromPngByte(PngFile.LoadPngBytes(path), ref w, ref h);
+                    if (tex == null) { _thumbFailed.Add(path); continue; }
+                    _thumbs[path] = tex;
+                    _thumbOrder.AddLast(path);
+                    while (_thumbOrder.Count > MaxThumbnails)
+                    {
+                        var old = _thumbOrder.First.Value;
+                        _thumbOrder.RemoveFirst();
+                        if (_thumbs.TryGetValue(old, out var oldTex) && oldTex != null) Destroy(oldTex);
+                        _thumbs.Remove(old);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _thumbFailed.Add(path);
+                    Logger.LogDebug($"Could not load the thumbnail of {path}: {ex.Message}");
+                }
+            }
+        }
+
+        private void ClearThumbnails()
+        {
+            foreach (var tex in _thumbs.Values) if (tex != null) Destroy(tex);
+            _thumbs.Clear();
+            _thumbOrder.Clear();
+            _thumbFailed.Clear();
+            _thumbWanted.Clear();
+        }
+
+        #endregion
 
         private void ChooseScene(string path)
         {
