@@ -21,7 +21,7 @@ namespace KKS_FreeHStudioSceneLoader
     {
         public const string GUID = "local.kks.freehstudiosceneloader";
         public const string PluginName = "Free H Studio Scene Loader (KKS port, experimental)";
-        public const string Version = "0.4.4";
+        public const string Version = "0.4.6";
 
         internal static new ManualLogSource Logger;
         internal static FreeHStudioSceneLoader Instance;
@@ -473,43 +473,48 @@ namespace KKS_FreeHStudioSceneLoader
 
         internal static readonly string[] TimeNames = { "朝", "昼", "夕方", "夜" };
 
-        private string _missingShownFor;
         private Vector2 _missingScroll;
         private string _copyStatus;
+        private string _copyStatusFor;
+        private GUIStyle _missingStyle;
+        private GUIStyle _allModsStyle;
 
-        /// <summary>The mods the scene needs that are not installed (as reported by Sideloader when it was read).</summary>
+        /// <summary>
+        /// The mods the scene needs that are not installed, as reported by Sideloader when the scene was read (that
+        /// happens when the scene is clicked in the list).
+        /// </summary>
         private void DrawMissingMods()
         {
-            GUILayout.BeginHorizontal();
-            if (GUILayout.Button("足りないMODを調べる"))
+            if (Selection.PreviewPath == null || !StudioHost.HasSceneData) return;
+            if (_missingStyle == null)
             {
-                _missingShownFor = Selection.PreviewPath;
-                _copyStatus = null;
+                // Light red for what is missing, light yellow-green when nothing is
+                _missingStyle = new GUIStyle(GUI.skin.label) { normal = { textColor = new Color(1f, 0.62f, 0.62f) } };
+                _allModsStyle = new GUIStyle(GUI.skin.label) { normal = { textColor = new Color(0.78f, 1f, 0.5f) } };
             }
-            bool shown = _missingShownFor != null && _missingShownFor == Selection.PreviewPath;
-            GUI.enabled = shown;
-            if (GUILayout.Button("クリップボードにコピー"))
+            if (_copyStatusFor != Selection.PreviewPath) _copyStatus = null;
+            var mods = StudioHost.MissingMods;
+            GUILayout.BeginHorizontal();
+            if (mods.Count == 0)
+                GUILayout.Label("MODは揃っています（シーンを読み込んだときに Sideloader が調べたもの）。", _allModsStyle);
+            else
+                GUILayout.Label($"足りないMOD: {mods.Count} 種類（使われている回数の多い順）", _missingStyle);
+            if (GUILayout.Button("クリップボードにコピー", GUILayout.ExpandWidth(false)))
             {
                 GUIUtility.systemCopyBuffer = StudioHost.MissingModsText(Selection.PreviewPath);
                 _copyStatus = "コピーしました。";
+                _copyStatusFor = Selection.PreviewPath;
             }
-            GUI.enabled = true;
             GUILayout.EndHorizontal();
-            if (!shown) return;
-            var mods = StudioHost.MissingMods;
-            if (mods.Count == 0)
-            {
-                GUILayout.Label("足りないMODはありません（シーンを読み込んだときに Sideloader が見つけたもの）。");
-                return;
-            }
-            GUILayout.Label($"足りないMOD: {mods.Count} 種類（使われている回数の多い順）" + (_copyStatus != null ? "　" + _copyStatus : ""));
+            if (_copyStatus != null) GUILayout.Label(_copyStatus);
+            if (mods.Count == 0) return;
             _missingScroll = GUILayout.BeginScrollView(_missingScroll, GUILayout.Height(Mathf.Min(mods.Count, 8) * 22 + 10));
             foreach (var m in mods.OrderByDescending(m => m.Count))
             {
                 var label = $"{(string.IsNullOrEmpty(m.Name) ? m.Guid : m.Name)}（{m.Count}）";
                 if (!string.IsNullOrEmpty(m.Author)) label += $"  作者: {m.Author}";
                 if (!string.IsNullOrEmpty(m.Website)) label += $"  {m.Website}";
-                GUILayout.Label(label);
+                GUILayout.Label(label, _missingStyle);
             }
             GUILayout.EndScrollView();
             GUILayout.Label("（ ）内はシーンで使われている回数です。シェーダーなど、Hで置いたときに初めて分かるものは含みません。");
@@ -723,9 +728,43 @@ namespace KKS_FreeHStudioSceneLoader
                 GUILayout.EndHorizontal();
                 GUILayout.Label("「カメラの注視点へ移動」: カメラを動かして、置きたい場所を画面の中心に合わせてから押してください。");
             }
+            DrawLayoutSlots();
             GUILayout.Label("音（シーンごとに保存します）:");
             DrawSoundChoice();
             GUI.DragWindow();
+        }
+
+        private string _layoutStatus;
+
+        /// <summary>Save/load slots for where the scene and its characters were moved to (saved per scene).</summary>
+        private void DrawLayoutSlots()
+        {
+            var settings = StudioHost.Settings;
+            if (settings == null) return;
+            GUILayout.Label("配置の保存（移動・回転・表示。シーンごとに保存します）:");
+            int last = settings.LastSavedLayout;
+            for (int i = 0; i < settings.Layouts.Length; i++)
+            {
+                var layout = settings.Layouts[i];
+                GUILayout.BeginHorizontal();
+                var label = $"スロット{i + 1}: " + (layout != null ? layout.Saved.ToString("M/d HH:mm") + (i == last ? "（最後に保存）" : "") : "空");
+                GUILayout.Label(label, GUILayout.Width(200));
+                if (GUILayout.Button("保存"))
+                    _layoutStatus = StudioHost.SaveLayout(i) ? $"スロット{i + 1}に保存しました。" : "保存できませんでした。";
+                GUI.enabled = layout != null;
+                if (GUILayout.Button("ロード"))
+                    _layoutStatus = StudioHost.LoadLayout(i) ? $"スロット{i + 1}を読み込みました。" : "読み込めませんでした。";
+                if (GUILayout.Button("消す"))
+                {
+                    StudioHost.DeleteLayout(i);
+                    _layoutStatus = $"スロット{i + 1}を消しました。";
+                }
+                GUI.enabled = true;
+                GUILayout.EndHorizontal();
+            }
+            var auto = GUILayout.Toggle(StudioHost.AutoLayoutOn, "シーンを読み込んだら、最後に保存したスロットを再現する");
+            if (auto != StudioHost.AutoLayoutOn) StudioHost.SetAutoLayout(auto);
+            if (!string.IsNullOrEmpty(_layoutStatus)) GUILayout.Label(_layoutStatus);
         }
 
         /// <summary>The point the H camera turns around (the center of the view).</summary>

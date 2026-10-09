@@ -135,6 +135,7 @@ namespace KKS_FreeHStudioSceneLoader
             }
             StudioHost.LoadCharacters();
             StudioHost.StartAnimation();
+            StudioHost.ApplySavedLayout();
         }
 
         [HarmonyPrefix, HarmonyPatch(typeof(HSceneProc), nameof(HSceneProc.OnDestroy))]

@@ -1,12 +1,15 @@
 ﻿// Koikatsu Sunshine port of FreeHStudioSceneLoader.
 // Modified for Koikatsu Sunshine, 2026. Licensed under GPL-3.0.
 //
-// Settings kept for each studio scene file: which characters are placed and whether the scene's sounds play.
+// Settings kept for each studio scene file: which characters are placed, whether the scene's sounds play, and
+// the layouts saved in H (where the characters and the scene were moved to).
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Xml;
+using UnityEngine;
 
 namespace KKS_FreeHStudioSceneLoader
 {
@@ -25,6 +28,47 @@ namespace KKS_FreeHStudioSceneLoader
         public int FreeHMap = -1;
         /// <summary>dicKey of the characters turned off in the selection window.</summary>
         public readonly HashSet<int> HiddenCharacters = new HashSet<int>();
+        /// <summary>Layouts saved in H (<see cref="LayoutSlots"/> slots, null: empty).</summary>
+        public readonly SceneLayout[] Layouts = new SceneLayout[LayoutSlots];
+        /// <summary>When the scene is placed in H, apply the layout saved last.</summary>
+        public bool AutoLayout = true;
+
+        public const int LayoutSlots = 3;
+
+        /// <summary>The slot saved last, or -1 when all are empty.</summary>
+        public int LastSavedLayout
+        {
+            get
+            {
+                int last = -1;
+                for (int i = 0; i < Layouts.Length; i++)
+                    if (Layouts[i] != null && (last < 0 || Layouts[i].Saved > Layouts[last].Saved)) last = i;
+                return last;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Where the scene and its characters were moved to in H, independent of the H map and its start position:
+    /// the scene's root relative to where it was first placed, the characters' own values (relative to the folder or
+    /// item they are under) and the offsets of the folders/items moved with them.
+    /// </summary>
+    internal class SceneLayout
+    {
+        public DateTime Saved;
+        public Vector3 RootPos;
+        public Quaternion RootRot = Quaternion.identity;
+        /// <summary>Characters by dicKey: changeAmount position and rotation, and the visibility switch.</summary>
+        public readonly Dictionary<int, LayoutPose> Characters = new Dictionary<int, LayoutPose>();
+        /// <summary>Folders/items moved with linked characters, by dicKey: local position and rotation of the offset.</summary>
+        public readonly Dictionary<int, LayoutPose> Offsets = new Dictionary<int, LayoutPose>();
+    }
+
+    internal class LayoutPose
+    {
+        public Vector3 Pos;
+        public Quaternion Rot = Quaternion.identity;
+        public bool Visible = true;
     }
 
     /// <summary>
@@ -63,6 +107,82 @@ namespace KKS_FreeHStudioSceneLoader
         private static bool ReadBool(XmlElement e, string name, bool fallback) =>
             e.HasAttribute(name) ? e.GetAttribute(name) == "true" : fallback;
 
+        private static string Floats(params float[] values) =>
+            string.Join(",", values.Select(v => v.ToString("R", CultureInfo.InvariantCulture)).ToArray());
+
+        private static float[] ReadFloats(XmlElement e, string name, int count)
+        {
+            var parts = e.GetAttribute(name).Split(',');
+            if (parts.Length != count) return null;
+            var values = new float[count];
+            for (int i = 0; i < count; i++)
+                if (!float.TryParse(parts[i], NumberStyles.Float, CultureInfo.InvariantCulture, out values[i])) return null;
+            return values;
+        }
+
+        private static void WritePose(XmlElement e, Vector3 pos, Quaternion rot)
+        {
+            e.SetAttribute("pos", Floats(pos.x, pos.y, pos.z));
+            e.SetAttribute("rot", Floats(rot.x, rot.y, rot.z, rot.w));
+        }
+
+        private static bool ReadPose(XmlElement e, out Vector3 pos, out Quaternion rot)
+        {
+            var p = ReadFloats(e, "pos", 3);
+            var r = ReadFloats(e, "rot", 4);
+            pos = p != null ? new Vector3(p[0], p[1], p[2]) : Vector3.zero;
+            rot = r != null ? new Quaternion(r[0], r[1], r[2], r[3]) : Quaternion.identity;
+            return p != null && r != null;
+        }
+
+        private static void WriteLayouts(XmlElement e, SceneSettings settings)
+        {
+            var doc = e.OwnerDocument;
+            if (!settings.AutoLayout) e.SetAttribute("autoLayout", "false");
+            for (int i = 0; i < settings.Layouts.Length; i++)
+            {
+                var layout = settings.Layouts[i];
+                if (layout == null) continue;
+                var le = (XmlElement)e.AppendChild(doc.CreateElement("layout"));
+                le.SetAttribute("slot", i.ToString());
+                le.SetAttribute("saved", layout.Saved.ToString("o", CultureInfo.InvariantCulture));
+                WritePose(le, layout.RootPos, layout.RootRot);
+                foreach (var kv in layout.Characters.OrderBy(k => k.Key))
+                {
+                    var ce = (XmlElement)le.AppendChild(doc.CreateElement("character"));
+                    ce.SetAttribute("key", kv.Key.ToString());
+                    WritePose(ce, kv.Value.Pos, kv.Value.Rot);
+                    if (!kv.Value.Visible) ce.SetAttribute("visible", "false");
+                }
+                foreach (var kv in layout.Offsets.OrderBy(k => k.Key))
+                {
+                    var oe = (XmlElement)le.AppendChild(doc.CreateElement("offset"));
+                    oe.SetAttribute("key", kv.Key.ToString());
+                    WritePose(oe, kv.Value.Pos, kv.Value.Rot);
+                }
+            }
+        }
+
+        private static void ReadLayouts(XmlElement e, SceneSettings settings)
+        {
+            settings.AutoLayout = ReadBool(e, "autoLayout", true);
+            foreach (XmlElement le in e.ChildNodes.OfType<XmlElement>().Where(x => x.Name == "layout"))
+            {
+                if (!int.TryParse(le.GetAttribute("slot"), out var slot) || slot < 0 || slot >= settings.Layouts.Length) continue;
+                var layout = new SceneLayout();
+                DateTime.TryParse(le.GetAttribute("saved"), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out layout.Saved);
+                ReadPose(le, out layout.RootPos, out layout.RootRot);
+                foreach (XmlElement ce in le.ChildNodes.OfType<XmlElement>())
+                {
+                    if (!int.TryParse(ce.GetAttribute("key"), out var key) || !ReadPose(ce, out var pos, out var rot)) continue;
+                    var pose = new LayoutPose { Pos = pos, Rot = rot, Visible = ReadBool(ce, "visible", true) };
+                    if (ce.Name == "character") layout.Characters[key] = pose;
+                    else if (ce.Name == "offset") layout.Offsets[key] = pose;
+                }
+                settings.Layouts[slot] = layout;
+            }
+        }
+
         internal static void Save(string scenePath, SceneSettings settings)
         {
             Load();
@@ -83,6 +203,7 @@ namespace KKS_FreeHStudioSceneLoader
                     if (kv.Value.FreeHMap >= 0) e.SetAttribute("freeHMap", kv.Value.FreeHMap.ToString());
                     if (kv.Value.HiddenCharacters.Count > 0)
                         e.SetAttribute("hiddenCharacters", string.Join(",", kv.Value.HiddenCharacters.OrderBy(i => i).Select(i => i.ToString()).ToArray()));
+                    WriteLayouts(e, kv.Value);
                 }
                 var tmp = FilePath + ".tmp";
                 doc.Save(tmp);
@@ -121,6 +242,7 @@ namespace KKS_FreeHStudioSceneLoader
                     if (int.TryParse(e.GetAttribute("freeHMap"), out var map)) settings.FreeHMap = map;
                     foreach (var s in e.GetAttribute("hiddenCharacters").Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
                         if (int.TryParse(s, out var key)) settings.HiddenCharacters.Add(key);
+                    ReadLayouts(e, settings);
                     _all[path] = settings;
                 }
             }

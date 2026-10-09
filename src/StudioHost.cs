@@ -792,6 +792,18 @@ namespace KKS_FreeHStudioSceneLoader
         }
 
         /// <summary>Plays each placed character's voice list from the start, like Studio's play button.</summary>
+        private static void StopVoices(OCIChar chara)
+        {
+            try
+            {
+                chara.voiceCtrl?.Stop();
+            }
+            catch (Exception ex)
+            {
+                FreeHStudioSceneLoader.Logger.LogWarning($"Could not stop the voices of {chara.charInfo?.fileParam?.fullname}: {ex.Message}");
+            }
+        }
+
         private static void PlayVoices()
         {
             foreach (var chara in _sceneCharacters.Where(c => c.Placed && c.Info.voiceCtrl != null && c.Info.voiceCtrl.list.Count > 0))
@@ -948,6 +960,122 @@ namespace KKS_FreeHStudioSceneLoader
             if (_overlayRoot == null) return;
             _overlayRoot.transform.position = _overlayRootPos;
             _overlayRoot.transform.rotation = _overlayRootRot;
+        }
+
+        #endregion
+
+        #region Layouts saved in H (per scene, a few slots)
+
+        /// <summary>Saves where the scene and its characters are now into a slot of the scene's settings.</summary>
+        internal static bool SaveLayout(int slot)
+        {
+            if (_overlayRoot == null || Settings == null || slot < 0 || slot >= Settings.Layouts.Length) return false;
+            var inv = Quaternion.Inverse(_overlayRootRot);
+            var root = _overlayRoot.transform;
+            var layout = new SceneLayout
+            {
+                Saved = DateTime.Now,
+                RootPos = inv * (root.position - _overlayRootPos),
+                RootRot = inv * root.rotation,
+            };
+            foreach (var chara in _sceneCharacters.Where(c => c.Placed))
+            {
+                var changeAmount = chara.Oci.objectInfo.changeAmount;
+                layout.Characters[chara.Info.dicKey] = new LayoutPose
+                {
+                    Pos = changeAmount.pos,
+                    Rot = Quaternion.Euler(changeAmount.rot),
+                    Visible = IsVisible(chara),
+                };
+            }
+            foreach (var kv in _moveOffsets)
+            {
+                if (kv.Key?.objectInfo == null || kv.Value == null) continue;
+                if (kv.Value.localPosition == Vector3.zero && kv.Value.localRotation == Quaternion.identity) continue;
+                layout.Offsets[kv.Key.objectInfo.dicKey] = new LayoutPose { Pos = kv.Value.localPosition, Rot = kv.Value.localRotation };
+            }
+            Settings.Layouts[slot] = layout;
+            SaveSettings();
+            FreeHStudioSceneLoader.Logger.LogInfo($"Layout saved to slot {slot + 1}: {layout.Characters.Count} character(s), {layout.Offsets.Count} moved folder(s)/item(s)");
+            return true;
+        }
+
+        /// <summary>Puts the scene and its characters where a slot has them (what is not in the slot goes back to the start).</summary>
+        internal static bool LoadLayout(int slot)
+        {
+            var layout = Settings != null && slot >= 0 && slot < Settings.Layouts.Length ? Settings.Layouts[slot] : null;
+            if (_overlayRoot == null || layout == null) return false;
+            var root = _overlayRoot.transform;
+            root.position = _overlayRootPos + _overlayRootRot * layout.RootPos;
+            root.rotation = _overlayRootRot * layout.RootRot;
+            // Offsets of folders/items moved with the characters
+            foreach (var offset in _moveOffsets.Values.Where(o => o != null))
+            {
+                offset.localPosition = Vector3.zero;
+                offset.localRotation = Quaternion.identity;
+            }
+            var placed = Singleton<Studio.Studio>.Instance.dicObjectCtrl;
+            int offsets = 0;
+            foreach (var kv in layout.Offsets)
+            {
+                if (!placed.TryGetValue(kv.Key, out var oci) || oci?.guideObject?.transformTarget == null) continue;
+                var offset = GetMoveOffset(oci);
+                offset.localPosition = kv.Value.Pos;
+                offset.localRotation = kv.Value.Rot;
+                offsets++;
+            }
+            int charas = 0;
+            foreach (var chara in _sceneCharacters.Where(c => c.Placed))
+            {
+                var changeAmount = chara.Oci.objectInfo.changeAmount;
+                if (layout.Characters.TryGetValue(chara.Info.dicKey, out var pose))
+                {
+                    changeAmount.pos = pose.Pos;
+                    changeAmount.rot = pose.Rot.eulerAngles;
+                    SetVisible(chara, pose.Visible);
+                    charas++;
+                }
+                else
+                {
+                    changeAmount.pos = chara.OriginalPos;
+                    changeAmount.rot = chara.OriginalRot;
+                }
+            }
+            FreeHStudioSceneLoader.Logger.LogInfo($"Layout of slot {slot + 1} applied: {charas} character(s), {offsets} moved folder(s)/item(s)");
+            return true;
+        }
+
+        internal static void DeleteLayout(int slot)
+        {
+            if (Settings == null || slot < 0 || slot >= Settings.Layouts.Length) return;
+            Settings.Layouts[slot] = null;
+            SaveSettings();
+        }
+
+        internal static bool AutoLayoutOn => Settings != null && Settings.AutoLayout;
+
+        internal static void SetAutoLayout(bool on)
+        {
+            if (Settings == null || Settings.AutoLayout == on) return;
+            Settings.AutoLayout = on;
+            SaveSettings();
+        }
+
+        /// <summary>When the scene was placed in H: applies the layout saved last, if the scene wants that.</summary>
+        internal static void ApplySavedLayout()
+        {
+            if (_overlayRoot == null || Settings == null || !Settings.AutoLayout) return;
+            int slot = Settings.LastSavedLayout;
+            if (slot < 0) return;
+            try
+            {
+                if (LoadLayout(slot))
+                    FreeHStudioSceneLoader.Logger.LogMessage($"スタジオシーンの配置: スロット{slot + 1}（最後に保存したもの）を再現しました");
+            }
+            catch (Exception ex)
+            {
+                FreeHStudioSceneLoader.Logger.LogWarning($"Could not apply the saved layout: {ex}");
+            }
         }
 
         #endregion
@@ -1248,7 +1376,12 @@ namespace KKS_FreeHStudioSceneLoader
                 try
                 {
                     if (oci is OCIChar chara)
+                    {
+                        // Studio's voice list goes on to the next voice when one ends (the audio is not on the
+                        // character), so it kept playing after H. OCIChar.OnDelete stops it in Studio.
+                        StopVoices(chara);
                         RemoveCharacter(chara.charInfo);
+                    }
                     else if (oci?.guideObject?.transformTarget != null)
                         UnityEngine.Object.Destroy(oci.guideObject.transformTarget.gameObject);
                 }
