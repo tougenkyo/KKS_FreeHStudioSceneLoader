@@ -102,6 +102,7 @@ namespace KKS_FreeHStudioSceneLoader
             yield return null;
             var camera = proc.flags.ctrlCamera != null ? proc.flags.ctrlCamera.thisCmaera : Camera.main;
             StudioHost.ShowBackground(camera);
+            if (FreeHStudioSceneLoader.UseSceneEffects.Value) StudioHost.ApplySceneEffects(camera);
             if (!noMap)
                 StudioHost.LoadOverlay(proc.map.mapRoot.transform);
 
@@ -119,6 +120,7 @@ namespace KKS_FreeHStudioSceneLoader
                 {
                     StudioHost.HideMap(proc.map.mapRoot);
                     StudioHost.PaintCameraBackground(camera);
+                    if (FreeHStudioSceneLoader.StudioLightingWithoutMap.Value) StudioHost.KeepMapLightsOffItems();
                 }
                 StudioHost.LoadOverlayAt(proc.initPos, proc.initRot);
             }
@@ -136,6 +138,18 @@ namespace KKS_FreeHStudioSceneLoader
             StudioHost.LoadCharacters();
             StudioHost.StartAnimation();
             StudioHost.ApplySavedLayout();
+
+            // Diagnostics: compare with the same scene in CharaStudio (StudioPoseProbe logs the same lines there)
+            yield return new WaitForSeconds(3f);
+            if (proc == null || !StudioHost.HasPlacedScene) yield break;
+            try
+            {
+                FreeHStudioSceneLoader.Logger.LogInfo(LightingProbe.Describe("H", StudioHost.SceneRenderers, camera));
+            }
+            catch (System.Exception ex)
+            {
+                FreeHStudioSceneLoader.Logger.LogWarning($"Could not log the lighting: {ex.Message}");
+            }
         }
 
         [HarmonyPrefix, HarmonyPatch(typeof(HSceneProc), nameof(HSceneProc.OnDestroy))]

@@ -21,7 +21,7 @@ namespace KKS_FreeHStudioSceneLoader
     {
         public const string GUID = "local.kks.freehstudiosceneloader";
         public const string PluginName = "Free H Studio Scene Loader (KKS port, experimental)";
-        public const string Version = "0.4.6";
+        public const string Version = "0.4.13";
 
         internal static new ManualLogSource Logger;
         internal static FreeHStudioSceneLoader Instance;
@@ -41,6 +41,8 @@ namespace KKS_FreeHStudioSceneLoader
         internal static ConfigEntry<float> WindowOpacity;
         internal static ConfigEntry<Vector2> ButtonInHPosition;
         internal static ConfigEntry<bool> HideBaseMap;
+        internal static ConfigEntry<bool> StudioLightingWithoutMap;
+        internal static ConfigEntry<bool> UseSceneEffects;
         internal static ConfigEntry<bool> ShowBackgroundImage;
         internal static ConfigEntry<Color> NoMapBackgroundColor;
         internal static ConfigEntry<bool> ShowButton;
@@ -75,6 +77,10 @@ namespace KKS_FreeHStudioSceneLoader
                 "Opens the studio scene selection window on the Free H selection screen.");
             HideBaseMap = Config.Bind("General", "Hide base map for scenes without a map", true,
                 "For studio scenes without a map, hide the Free H map that provides the H positions, so only the scene's own objects are visible.");
+            StudioLightingWithoutMap = Config.Bind("General", "Studio lighting for scenes without a map", true,
+                "With the base map hidden, keep its lights (sun, room lights) and its ambient light off the studio items, as in Studio where only the scene's own lights light them.");
+            UseSceneEffects = Config.Bind("General", "Use the shadows and bloom of the scene", true,
+                "While a studio scene is placed in H, use its shadow, bloom, ambient occlusion and ambient shadow color settings (saved with the scene in Studio) instead of the game's graphic settings. Without shadows the scene's lights shine through walls.");
             NoMapBackgroundColor = Config.Bind("General", "Background color for scenes without a map", Color.black,
                 "Color drawn behind scenes without a map when the base map is hidden (Studio shows black there).");
             ShowBackgroundImage = Config.Bind("General", "Show studio background image", true,

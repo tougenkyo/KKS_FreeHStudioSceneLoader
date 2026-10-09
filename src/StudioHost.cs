@@ -59,6 +59,7 @@ namespace KKS_FreeHStudioSceneLoader
         internal static bool HasPlacedScene => _overlayRoot != null;
         /// <summary>Where the scene's origin is now (the pivot to turn a scene without characters around).</summary>
         internal static Vector3 SceneOrigin => _overlayRoot != null ? _overlayRoot.transform.position : Vector3.zero;
+        internal static Renderer[] SceneRenderers => _overlayRoot != null ? _overlayRoot.GetComponentsInChildren<Renderer>(true) : new Renderer[0];
 
         private static bool IsCharacterEnabled(OICharInfo info)
         {
@@ -572,7 +573,7 @@ namespace KKS_FreeHStudioSceneLoader
             _overlayRootRot = rootRot;
             _moveOffsets.Clear();
 
-            int loaded = 0, skipped = 0;
+            int loaded = 0, skipped = 0, lights = 0;
             _pendingCharacters.Clear();
             foreach (var info in _sceneInfo.dicObject.Values.ToList())
             {
@@ -590,6 +591,7 @@ namespace KKS_FreeHStudioSceneLoader
                     {
                         oci.guideObject.transformTarget.SetParent(_overlayRoot.transform, false);
                         loaded++;
+                        if (oci is OCILight) lights++;
                     }
                 }
                 catch (Exception ex)
@@ -598,7 +600,8 @@ namespace KKS_FreeHStudioSceneLoader
                 }
             }
             ApplyScales();
-            FreeHStudioSceneLoader.Logger.LogInfo($"Studio scene objects placed: {loaded} (skipped {skipped} cameras/routes/texts/characters turned off), {_pendingCharacters.Count} character(s) to load");
+            HideInsideHiddenNodes();
+            FreeHStudioSceneLoader.Logger.LogInfo($"Studio scene objects placed: {loaded}, {lights} of them lights (skipped {skipped} cameras/routes/texts/characters turned off), {_pendingCharacters.Count} character(s) to load");
         }
 
         private static bool DeferCharacter(ObjectInfo info, ObjectInfo parent)
@@ -675,6 +678,7 @@ namespace KKS_FreeHStudioSceneLoader
                 }
             }
             ApplyScales();
+            HideInsideHiddenNodes();
             FreeHStudioSceneLoader.Logger.LogInfo($"Studio scene characters placed: {loaded}");
             if (Settings != null && Settings.CharaVoices) PlayVoices();
             if (loaded > 0)
@@ -1257,6 +1261,221 @@ namespace KKS_FreeHStudioSceneLoader
             name = found.sex == 1 ? "the female character" : "the character";
         }
 
+        /// <summary>
+        /// Hides what is inside a hidden folder/item, as Studio's TreeNodeCtrl.RefreshVisibleLoop does after loading
+        /// (patched out with the rest of the tree UI): the children keep their own switch but are not shown.
+        /// </summary>
+        private static void HideInsideHiddenNodes()
+        {
+            int hidden = 0;
+            void visit(TreeNodeObject node, bool parentHidden)
+            {
+                if (node == null) return;
+                if (parentHidden)
+                {
+                    try { node.onVisible?.Invoke(false); hidden++; }
+                    catch (Exception ex) { FreeHStudioSceneLoader.Logger.LogDebug($"Hiding a node: {ex.Message}"); }
+                }
+                bool hide = parentHidden || !node.visible;
+                foreach (var child in node.child.ToList()) visit(child, hide);
+            }
+            foreach (var root in Singleton<Studio.Studio>.Instance.treeNodeCtrl.m_TreeNodeObject.Where(n => n != null && n.parent == null).ToList())
+                visit(root, false);
+            if (hidden > 0) FreeHStudioSceneLoader.Logger.LogInfo($"Objects inside hidden folders/items hidden: {hidden}");
+        }
+
+        #region Shadows and bloom of the scene
+
+        private static int _oldQualityLevel = -1;
+        private static Color? _oldAmbientShadow;
+        private static Behaviour _occlusion;
+        private static bool _oldOcclusionEnabled, _oldConfigOcclusion;
+        private static readonly Dictionary<string, object> _oldOcclusionValues = new Dictionary<string, object>();
+
+        /// <summary>
+        /// The ambient occlusion of Studio's camera (CharaStudio_Data/level2, AmplifyOcclusionEffect) apart from what
+        /// the scene sets (on/off, tint, radius). The game's H camera has its own (e.g. radius 0, power 0, black),
+        /// which darkened the edges around the objects much more.
+        /// </summary>
+        private static readonly KeyValuePair<string, object>[] StudioOcclusion =
+        {
+            new KeyValuePair<string, object>("SampleCount", "High"),
+            new KeyValuePair<string, object>("Intensity", 1f),
+            new KeyValuePair<string, object>("PowerExponent", 1f),
+            new KeyValuePair<string, object>("Bias", 0.1f),
+            new KeyValuePair<string, object>("Downsample", false),
+            new KeyValuePair<string, object>("FadeEnabled", false),
+            new KeyValuePair<string, object>("BlurEnabled", true),
+            new KeyValuePair<string, object>("BlurRadius", 4),
+            new KeyValuePair<string, object>("BlurPasses", 4),
+            new KeyValuePair<string, object>("BlurSharpness", 20f),
+        };
+
+        private static void ApplySceneOcclusion(Camera camera)
+        {
+            var occlusion = camera != null ? camera.GetComponents<Behaviour>().FirstOrDefault(b => b.GetType().Name == "AmplifyOcclusionEffect") : null;
+            if (occlusion == null) return;
+            var values = new List<KeyValuePair<string, object>>(StudioOcclusion)
+            {
+                new KeyValuePair<string, object>("Tint", _sceneInfo.aoeColor),
+                new KeyValuePair<string, object>("Radius", _sceneInfo.aoeRadius),
+            };
+            if (_occlusion == null)
+            {
+                _occlusion = occlusion;
+                _oldOcclusionEnabled = occlusion.enabled;
+                _oldOcclusionValues.Clear();
+                foreach (var kv in values)
+                {
+                    var field = HarmonyLib.AccessTools.Field(occlusion.GetType(), kv.Key);
+                    if (field != null) _oldOcclusionValues[kv.Key] = field.GetValue(occlusion);
+                }
+                // The game's config switches it every frame (CameraEffectorConfig.Update) unless told not to
+                var config = camera.GetComponent<CameraEffectorConfig>();
+                if (config != null)
+                {
+                    if (_effectorConfig == null) _effectorConfig = config;
+                    var use = HarmonyLib.Traverse.Create(config).Field("_useAmplifyOcclus");
+                    _oldConfigOcclusion = use.GetValue<bool>();
+                    use.SetValue(false);
+                }
+            }
+            foreach (var kv in values)
+            {
+                var field = HarmonyLib.AccessTools.Field(occlusion.GetType(), kv.Key);
+                if (field == null) continue;
+                var value = kv.Value is string name && field.FieldType.IsEnum ? Enum.Parse(field.FieldType, name) : kv.Value;
+                field.SetValue(occlusion, value);
+            }
+            occlusion.enabled = _sceneInfo.enableAOE;
+            FreeHStudioSceneLoader.Logger.LogInfo($"Scene ambient occlusion {(_sceneInfo.enableAOE ? "on" : "off")}: tint {_sceneInfo.aoeColor}, radius {_sceneInfo.aoeRadius}");
+        }
+
+        private static void RestoreSceneOcclusion()
+        {
+            if (_occlusion != null)
+            {
+                foreach (var kv in _oldOcclusionValues)
+                    HarmonyLib.AccessTools.Field(_occlusion.GetType(), kv.Key)?.SetValue(_occlusion, kv.Value);
+                _occlusion.enabled = _oldOcclusionEnabled;
+                if (_effectorConfig != null) HarmonyLib.Traverse.Create(_effectorConfig).Field("_useAmplifyOcclus").SetValue(_oldConfigOcclusion);
+            }
+            _occlusion = null;
+            _oldOcclusionValues.Clear();
+        }
+        private static Behaviour _bloom;
+        private static CameraEffectorConfig _effectorConfig;
+        private static bool _oldBloomEnabled, _oldConfigBloom;
+        private static float _oldBloomIntensity, _oldBloomThreshold, _oldBloomBlur;
+
+        /// <summary>
+        /// Studio saves shadows, bloom and the ambient shadow color with the scene; the game uses its graphic settings
+        /// instead (self shadow off means a quality level without shadows, so the scene's lights shine through walls).
+        /// Use the scene's while it is placed, like Studio's SystemButtonCtrl does.
+        /// </summary>
+        internal static void ApplySceneEffects(Camera camera)
+        {
+            if (_sceneInfo == null) return;
+            try
+            {
+                // The game's quality levels come in pairs: even with shadows, odd without (Config.GraphicSetting)
+                int level = QualitySettings.GetQualityLevel();
+                int wanted = level / 2 * 2 + (_sceneInfo.enableShadow ? 0 : 1);
+                if (wanted != level)
+                {
+                    if (_oldQualityLevel < 0) _oldQualityLevel = level;
+                    QualitySettings.SetQualityLevel(wanted, true);
+                }
+                FreeHStudioSceneLoader.Logger.LogInfo($"Scene shadows {(_sceneInfo.enableShadow ? "on" : "off")}: quality {QualitySettings.names[QualitySettings.GetQualityLevel()]}");
+            }
+            catch (Exception ex)
+            {
+                FreeHStudioSceneLoader.Logger.LogWarning($"Could not set the shadows of the scene: {ex.Message}");
+            }
+            try
+            {
+                // 「全体の陰影の色」: the shadow color of the toon shaders, items (main_StandardMDK_studio) included
+                // (SystemButtonCtrl.SetAmbientShadow)
+                if (_oldAmbientShadow == null) _oldAmbientShadow = Shader.GetGlobalColor(ChaShader._ambientshadowG);
+                var shadow = _sceneInfo.ambientShadow;
+                shadow.a = 1f - _sceneInfo.ambientShadowG;
+                Shader.SetGlobalColor(ChaShader._ambientshadowG, shadow);
+                FreeHStudioSceneLoader.Logger.LogInfo($"Scene ambient shadow color {shadow}");
+            }
+            catch (Exception ex)
+            {
+                FreeHStudioSceneLoader.Logger.LogWarning($"Could not set the ambient shadow color of the scene: {ex.Message}");
+            }
+            try
+            {
+                ApplySceneOcclusion(camera);
+            }
+            catch (Exception ex)
+            {
+                FreeHStudioSceneLoader.Logger.LogWarning($"Could not set the ambient occlusion of the scene: {ex.Message}");
+            }
+            try
+            {
+                var bloom = camera != null ? camera.GetComponents<Behaviour>().FirstOrDefault(b => b.GetType().Name == "BloomAndFlares") : null;
+                if (bloom == null) return;
+                var t = HarmonyLib.Traverse.Create(bloom);
+                if (_bloom == null)
+                {
+                    _bloom = bloom;
+                    _oldBloomEnabled = bloom.enabled;
+                    _oldBloomIntensity = t.Field("bloomIntensity").GetValue<float>();
+                    _oldBloomThreshold = t.Field("bloomThreshold").GetValue<float>();
+                    _oldBloomBlur = t.Field("sepBlurSpread").GetValue<float>();
+                    // The game's config switches bloom every frame (CameraEffectorConfig.Update) unless told not to
+                    if (_effectorConfig == null) _effectorConfig = camera.GetComponent<CameraEffectorConfig>();
+                    if (_effectorConfig != null)
+                    {
+                        _oldConfigBloom = _effectorConfig.useBloom;
+                        _effectorConfig.useBloom = false;
+                    }
+                }
+                t.Field("bloomIntensity").SetValue(_sceneInfo.bloomIntensity);
+                t.Field("bloomThreshold").SetValue(_sceneInfo.bloomThreshold);
+                t.Field("sepBlurSpread").SetValue(_sceneInfo.bloomBlur);
+                bloom.enabled = _sceneInfo.enableBloom;
+                FreeHStudioSceneLoader.Logger.LogInfo($"Scene bloom {(_sceneInfo.enableBloom ? "on" : "off")}: intensity {_sceneInfo.bloomIntensity}, threshold {_sceneInfo.bloomThreshold}, blur {_sceneInfo.bloomBlur}");
+            }
+            catch (Exception ex)
+            {
+                FreeHStudioSceneLoader.Logger.LogWarning($"Could not set the bloom of the scene: {ex.Message}");
+            }
+        }
+
+        private static void RestoreSceneEffects()
+        {
+            try { RestoreSceneOcclusion(); }
+            catch (Exception ex) { FreeHStudioSceneLoader.Logger.LogWarning($"Could not restore the ambient occlusion: {ex.Message}"); }
+            if (_oldAmbientShadow != null)
+            {
+                Shader.SetGlobalColor(ChaShader._ambientshadowG, _oldAmbientShadow.Value);
+                _oldAmbientShadow = null;
+            }
+            if (_oldQualityLevel >= 0)
+            {
+                try { QualitySettings.SetQualityLevel(_oldQualityLevel, true); }
+                catch (Exception ex) { FreeHStudioSceneLoader.Logger.LogWarning($"Could not restore the quality level: {ex.Message}"); }
+                _oldQualityLevel = -1;
+            }
+            if (_bloom != null)
+            {
+                var t = HarmonyLib.Traverse.Create(_bloom);
+                t.Field("bloomIntensity").SetValue(_oldBloomIntensity);
+                t.Field("bloomThreshold").SetValue(_oldBloomThreshold);
+                t.Field("sepBlurSpread").SetValue(_oldBloomBlur);
+                _bloom.enabled = _oldBloomEnabled;
+            }
+            if (_effectorConfig != null && _bloom != null) _effectorConfig.useBloom = _oldConfigBloom;
+            _bloom = null;
+            _effectorConfig = null;
+        }
+
+        #endregion
+
         private static readonly List<Renderer> _hiddenRenderers = new List<Renderer>();
 
         /// <summary>Hides the base map's visuals; its H points and colliders keep working.</summary>
@@ -1271,6 +1490,69 @@ namespace KKS_FreeHStudioSceneLoader
             }
             FreeHStudioSceneLoader.Logger.LogInfo($"Base map hidden ({_hiddenRenderers.Count} renderers)");
         }
+
+        private struct LightState
+        {
+            public Light Light;
+            public int CullingMask;
+        }
+
+        private static readonly List<LightState> _limitedLights = new List<LightState>();
+
+        /// <summary>
+        /// In Studio, a scene without a map has no light on the layers of items (Map, MapNoShadow): the character
+        /// light only lights characters, so the items are lit by the scene's own lights only. The hidden H map's lights
+        /// (sun, room lights) stay on in H. Take those layers out of every light that is not part of the studio scene
+        /// or of a character (the H characters keep their lighting), and remove the map's ambient light.
+        /// </summary>
+        internal static void KeepMapLightsOffItems()
+        {
+            int itemLayers = LayerMask.GetMask("Map", "MapNoShadow");
+            foreach (var light in UnityEngine.Object.FindObjectsOfType<Light>())
+            {
+                if ((light.cullingMask & itemLayers) == 0) continue;
+                if (_overlayRoot != null && light.transform.IsChildOf(_overlayRoot.transform)) continue;
+                if (light.GetComponentInParent<ChaControl>() != null) continue;
+                _limitedLights.Add(new LightState { Light = light, CullingMask = light.cullingMask });
+                FreeHStudioSceneLoader.Logger.LogDebug($"Light {light.name} ({light.type}, intensity {light.intensity}, color {light.color}, mask {light.cullingMask:X}) kept off the studio items");
+                light.cullingMask &= ~itemLayers;
+            }
+            FreeHStudioSceneLoader.Logger.LogInfo($"Lights of the H map kept off the studio items: {_limitedLights.Count}");
+
+            // The studio items (Shader Forge/main_StandardMDK_studio, Standard based) are lit by the ambient light
+            // (spherical harmonics) too. Studio's own scene (CharaStudio_Data/level2) has none: its ambient probe is
+            // all zero, so without a map only the scene's lights light the items. In H the hidden map's ambient
+            // (e.g. L0 (0.18, 0.23, 0.30) for the club room) lit the whole room evenly. Use Studio's values.
+            // The item shader also adds the ambient color itself (UNITY_LIGHTMODEL_AMBIENT): Studio's is a dark
+            // blue gray, the H maps' white, which washed the whole room out.
+            if (!_ambientChanged)
+            {
+                _oldAmbientProbe = RenderSettings.ambientProbe;
+                _oldReflectionIntensity = RenderSettings.reflectionIntensity;
+                _oldAmbientSky = RenderSettings.ambientSkyColor;
+                _oldAmbientEquator = RenderSettings.ambientEquatorColor;
+                _oldAmbientGround = RenderSettings.ambientGroundColor;
+                _oldAmbientIntensity = RenderSettings.ambientIntensity;
+                _ambientChanged = true;
+            }
+            RenderSettings.ambientProbe = new UnityEngine.Rendering.SphericalHarmonicsL2();
+            RenderSettings.reflectionIntensity = 0.7f;
+            RenderSettings.ambientSkyColor = StudioAmbientSky;
+            RenderSettings.ambientEquatorColor = StudioAmbientEquator;
+            RenderSettings.ambientGroundColor = StudioAmbientGround;
+            RenderSettings.ambientIntensity = 1.5f;
+            FreeHStudioSceneLoader.Logger.LogInfo($"Ambient light set as in Studio: color {RenderSettings.ambientLight}, no ambient probe, reflections x0.7");
+        }
+
+        // Studio's own scene (CharaStudio_Data/level2, RenderSettings)
+        private static readonly Color StudioAmbientSky = new Color(0.318f, 0.3405f, 0.3885f, 1.5f);
+        private static readonly Color StudioAmbientEquator = new Color(0.171f, 0.1875f, 0.1995f, 1.5f);
+        private static readonly Color StudioAmbientGround = new Color(0.0705f, 0.0645f, 0.0525f, 1.5f);
+
+        private static bool _ambientChanged;
+        private static UnityEngine.Rendering.SphericalHarmonicsL2 _oldAmbientProbe;
+        private static float _oldReflectionIntensity, _oldAmbientIntensity;
+        private static Color _oldAmbientSky, _oldAmbientEquator, _oldAmbientGround;
 
         private struct CameraState
         {
@@ -1310,8 +1592,21 @@ namespace KKS_FreeHStudioSceneLoader
 
         private static void RestoreMap()
         {
+            RestoreSceneEffects();
             foreach (var r in _hiddenRenderers) if (r != null) r.enabled = true;
             _hiddenRenderers.Clear();
+            foreach (var state in _limitedLights) if (state.Light != null) state.Light.cullingMask = state.CullingMask;
+            _limitedLights.Clear();
+            if (_ambientChanged)
+            {
+                RenderSettings.ambientProbe = _oldAmbientProbe;
+                RenderSettings.reflectionIntensity = _oldReflectionIntensity;
+                RenderSettings.ambientSkyColor = _oldAmbientSky;
+                RenderSettings.ambientEquatorColor = _oldAmbientEquator;
+                RenderSettings.ambientGroundColor = _oldAmbientGround;
+                RenderSettings.ambientIntensity = _oldAmbientIntensity;
+                _ambientChanged = false;
+            }
             foreach (var state in _paintedCameras)
             {
                 if (state.Camera == null) continue;
