@@ -559,7 +559,9 @@ namespace KKS_FreeHStudioSceneLoader
 
         // In H, ChaControl.UpdateVisible applies the H options (male body visible, silhouette) to every male.
         // Scene characters follow their own settings like in Studio instead: the check for the H scene is
-        // answered with false for them.
+        // answered with false for them. Studio's own ChaControl.UpdateVisible (CharaStudio_Data) always uses the
+        // character's silhouette switch (fileStatus.visibleSimple, the 「シルエット」 of Studio), while the game's only
+        // reads it inside the H branch; so the silhouette starts from the switch for scene characters.
         [HarmonyTranspiler, HarmonyPatch(typeof(ChaControl), nameof(ChaControl.UpdateVisible))]
         private static IEnumerable<CodeInstruction> ChaControl_UpdateVisible_Transpiler(IEnumerable<CodeInstruction> instructions)
         {
@@ -581,8 +583,25 @@ namespace KKS_FreeHStudioSceneLoader
                 replaced++;
             }
             if (replaced != 1) FreeHStudioSceneLoader.Logger.LogWarning($"ChaControl.UpdateVisible: {replaced} scene checks found instead of 1");
+
+            // `bool flag2 = false;` (the silhouette) is the first false stored into a local, before the H branch
+            bool simple = false;
+            for (int i = 0; i < list.Count - 1 && i < 12; i++)
+            {
+                if (list[i].opcode != System.Reflection.Emit.OpCodes.Ldc_I4_0 || !list[i + 1].IsStloc()) continue;
+                var self = new CodeInstruction(System.Reflection.Emit.OpCodes.Ldarg_0);
+                self.labels.AddRange(list[i].labels);
+                list[i] = new CodeInstruction(System.Reflection.Emit.OpCodes.Call, AccessTools.Method(typeof(Hooks), nameof(SceneCharacterSilhouette)));
+                list.Insert(i, self);
+                simple = true;
+                break;
+            }
+            if (!simple) FreeHStudioSceneLoader.Logger.LogWarning("ChaControl.UpdateVisible: silhouette flag not found, scene characters' silhouettes won't show");
             return list;
         }
+
+        private static bool SceneCharacterSilhouette(ChaControl chara) =>
+            chara != null && StudioHost.IsSceneCharacter(chara) && chara.fileStatus.visibleSimple;
 
         private static bool IsInHForVisibility(IEnumerable<string> sceneNames, System.Func<string, bool> predicate, ChaControl chara) =>
             System.Linq.Enumerable.Any(sceneNames, predicate) && !StudioHost.IsSceneCharacter(chara);
