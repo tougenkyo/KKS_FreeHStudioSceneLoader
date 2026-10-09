@@ -8,6 +8,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using HarmonyLib;
 using Studio;
 using UnityEngine;
@@ -87,14 +88,22 @@ namespace KKS_FreeHStudioSceneLoader
             }
             if (!proc.flags.isFreeH)
                 yield break;
+            try
+            {
+                var timeZone = Traverse.Create(proc).Field("dataH").Field("timezoneFreeH").GetValue<int>();
+                string[] times = { "朝", "昼", "夕方", "夜" };
+                string Name(int t) => t >= 0 && t < times.Length ? times[t] : t.ToString();
+                FreeHStudioSceneLoader.Logger.LogInfo($"H map {proc.map.no} ({proc.map.ConvertMapName(proc.map.no)}), Free H time of day {Name(timeZone)} ({timeZone}), studio scene time of day {Name(StudioHost.SceneSunLightType)} ({StudioHost.SceneSunLightType})");
+            }
+            catch (System.Exception ex)
+            {
+                FreeHStudioSceneLoader.Logger.LogDebug($"Could not log the H map and time of day: {ex.Message}");
+            }
             yield return null;
             var camera = proc.flags.ctrlCamera != null ? proc.flags.ctrlCamera.thisCmaera : Camera.main;
             StudioHost.ShowBackground(camera);
             if (!noMap)
-            {
                 StudioHost.LoadOverlay(proc.map.mapRoot.transform);
-                yield break;
-            }
 
             // The H start position (initPos/initRot) is final once the characters start to be created
             while (proc != null && proc.lstFemale.Count == 0 && Time.realtimeSinceStartup < timeout)
@@ -104,12 +113,28 @@ namespace KKS_FreeHStudioSceneLoader
                 FreeHStudioSceneLoader.Logger.LogWarning("H characters were not created in time, studio objects not placed");
                 yield break;
             }
-            if (FreeHStudioSceneLoader.HideBaseMap.Value)
+            if (noMap)
             {
-                StudioHost.HideMap(proc.map.mapRoot);
-                StudioHost.PaintCameraBackground(camera);
+                if (FreeHStudioSceneLoader.HideBaseMap.Value)
+                {
+                    StudioHost.HideMap(proc.map.mapRoot);
+                    StudioHost.PaintCameraBackground(camera);
+                }
+                StudioHost.LoadOverlayAt(proc.initPos, proc.initRot);
             }
-            StudioHost.LoadOverlayAt(proc.initPos, proc.initRot);
+
+            // Scene characters come last, after the game created all of its own characters (MotionIK is set up
+            // right after that), so the H characters keep the first character slots
+            timeout = Time.realtimeSinceStartup + 120f;
+            while (proc != null && (proc.male == null || proc.lstMotionIK.Count == 0) && Time.realtimeSinceStartup < timeout)
+                yield return null;
+            if (proc == null || proc.male == null)
+            {
+                FreeHStudioSceneLoader.Logger.LogWarning("H characters were not ready in time, studio characters not placed");
+                yield break;
+            }
+            StudioHost.LoadCharacters();
+            StudioHost.StartAnimation();
         }
 
         [HarmonyPrefix, HarmonyPatch(typeof(HSceneProc), nameof(HSceneProc.OnDestroy))]
@@ -216,18 +241,11 @@ namespace KKS_FreeHStudioSceneLoader
         [HarmonyPrefix, HarmonyPatch(typeof(GuideObject), nameof(GuideObject.SetVisibleCenter))]
         private static bool GuideObject_SetVisibleCenter() => Off;
 
+        // The guide objects are cloned from an inactive original, so Awake only runs when one is activated later
+        // (the IK/FK guides of characters). By then it is set up; resetting dicKey/calcScale like the original Awake
+        // would make LateUpdate force the world scale of the character's bones to 1. The rest of Awake is UI.
         [HarmonyPrefix, HarmonyPatch(typeof(GuideObject), nameof(GuideObject.Awake))]
-        private static bool GuideObject_Awake(GuideObject __instance)
-        {
-            if (Off) return true;
-            // KKS Awake: same fields as KK, then UI (workInfo axis, selection renderer, guide parts) which is skipped
-            __instance.m_DicKey = -1;
-            __instance.isActiveFunc = null;
-            __instance.parentGuide = null;
-            __instance.enableMaluti = true;
-            __instance.calcScale = true;
-            return false;
-        }
+        private static bool GuideObject_Awake() => Off;
 
         [HarmonyPrefix, HarmonyPatch(typeof(GuideObject), nameof(GuideObject.LateUpdate))]
         private static bool GuideObject_LateUpdate(GuideObject __instance)
@@ -273,7 +291,7 @@ namespace KKS_FreeHStudioSceneLoader
 
         // Studio sound/voice items start playing as soon as they are enabled; don't let them play during H unless enabled
         [HarmonyPrefix, HarmonyPatch(typeof(Studio.Sound.SEComponent), nameof(Studio.Sound.SEComponent.OnEnable))]
-        private static bool SEComponent_OnEnable() => Off || FreeHStudioSceneLoader.PlaySoundItems.Value;
+        private static bool SEComponent_OnEnable() => Off || StudioHost.SoundItemsOn;
 
         #endregion
 
@@ -464,6 +482,92 @@ namespace KKS_FreeHStudioSceneLoader
             if (mark == expected) return false;
             return !(StudioHost.IsLoadingScene && System.Linq.Enumerable.Contains(ChaFileDefine.KoikatsuCharaFileMarkCheck, mark));
         }
+
+        #endregion
+
+        #region Scene characters
+
+        // Studio's order (see SceneAnimator): KKPE bones go in before IK solves; Timeline's late values and the
+        // constraints after IK/FK and before the dynamic bones (hair etc.) simulate. Whichever of these
+        // LateUpdates comes first in the frame starts the phase. The PVCopy check (StudioHost.CheckPvCopy) goes
+        // before IK as well.
+        [HarmonyPrefix, HarmonyPatch(typeof(RootMotion.SolverManager), "LateUpdate")]
+        private static void SolverManager_LateUpdate() => BeforeIK();
+        [HarmonyPrefix, HarmonyPatch(typeof(NeckLookControllerVer2), "LateUpdate")]
+        private static void NeckLookControllerVer2_LateUpdate() => BeforeIK();
+        [HarmonyPrefix, HarmonyPatch(typeof(FKCtrl), "LateUpdate")]
+        private static void FKCtrl_LateUpdate() => BeforeIK();
+        [HarmonyPrefix, HarmonyPatch(typeof(DynamicBone_Ver02), "LateUpdate")]
+        private static void DynamicBone_Ver02_LateUpdate() => SceneAnimator.RunLatePhase();
+        [HarmonyPrefix, HarmonyPatch(typeof(DynamicBone), "LateUpdate")]
+        private static void DynamicBone_LateUpdate() => SceneAnimator.RunLatePhase();
+
+        private static void BeforeIK()
+        {
+            StudioHost.CheckPvCopy();
+            SceneAnimator.RunPosePhase();
+        }
+
+        private const string GameBoneBundle = "chara/oo_base.unity3d";
+        private const string StudioBoneBundle = "studio/base/00.unity3d";
+
+        // Studio's ChaControl loads the body and head bone prefabs from studio/base/00.unity3d. Those carry the
+        // Studio components (Preparation, CharAnimeCtrl, IKCtrl, PVCopy) that posing a studio character needs;
+        // the game's copies in chara/oo_base.unity3d don't. Use Studio's bundle while a scene character is created.
+        // AddObjectFemale/Male create it with ChaControl.Load, which runs LoadNoAsync.
+        [HarmonyTranspiler, HarmonyPatch(typeof(ChaControl), nameof(ChaControl.LoadNoAsync))]
+        private static IEnumerable<CodeInstruction> ChaControl_LoadNoAsync_Transpiler(IEnumerable<CodeInstruction> instructions)
+        {
+            var list = new List<CodeInstruction>(instructions);
+            int replaced = 0;
+            for (int i = 0; i < list.Count; i++)
+            {
+                if (list[i].opcode != System.Reflection.Emit.OpCodes.Ldstr || (string)list[i].operand != GameBoneBundle) continue;
+                // e.g. text = "chara/oo_base.unity3d"; text2 = hiPoly ? "p_cf_body_bone" : "p_cf_body_bone_low";
+                bool loadsBones = false;
+                for (int j = i + 1; j < list.Count && j <= i + 10; j++)
+                    if (list[j].opcode == System.Reflection.Emit.OpCodes.Ldstr && list[j].operand is string asset && asset.StartsWith("p_c") && asset.Contains("_bone"))
+                        loadsBones = true;
+                if (!loadsBones) continue;
+                list.Insert(i + 1, new CodeInstruction(System.Reflection.Emit.OpCodes.Call, AccessTools.Method(typeof(Hooks), nameof(BoneBundle))));
+                replaced++;
+            }
+            // Expected: body bones and head bones. Characters can't be posed otherwise, but the game is not affected.
+            if (replaced != 2) FreeHStudioSceneLoader.Logger.LogWarning($"ChaControl.LoadNoAsync: {replaced} bone bundle loads found instead of 2");
+            return list;
+        }
+
+        private static string BoneBundle(string bundle) => StudioHost.IsLoadingCharacter ? StudioBoneBundle : bundle;
+
+        // In H, ChaControl.UpdateVisible applies the H options (male body visible, silhouette) to every male.
+        // Scene characters follow their own settings like in Studio instead: the check for the H scene is
+        // answered with false for them.
+        [HarmonyTranspiler, HarmonyPatch(typeof(ChaControl), nameof(ChaControl.UpdateVisible))]
+        private static IEnumerable<CodeInstruction> ChaControl_UpdateVisible_Transpiler(IEnumerable<CodeInstruction> instructions)
+        {
+            var any = AccessTools.GetDeclaredMethods(typeof(System.Linq.Enumerable))
+                .First(m => m.Name == nameof(System.Linq.Enumerable.Any) && m.GetParameters().Length == 2)
+                .MakeGenericMethod(typeof(string));
+            var list = new List<CodeInstruction>(instructions);
+            int replaced = 0;
+            for (int i = 0; i < list.Count; i++)
+            {
+                if (!list[i].Calls(any)) continue;
+                // Pass `this` as an extra argument; labels move to the inserted instruction so jumps still push it
+                var self = new CodeInstruction(System.Reflection.Emit.OpCodes.Ldarg_0);
+                self.labels.AddRange(list[i].labels);
+                list[i].labels.Clear();
+                list[i].operand = AccessTools.Method(typeof(Hooks), nameof(IsInHForVisibility));
+                list.Insert(i, self);
+                i++;
+                replaced++;
+            }
+            if (replaced != 1) FreeHStudioSceneLoader.Logger.LogWarning($"ChaControl.UpdateVisible: {replaced} scene checks found instead of 1");
+            return list;
+        }
+
+        private static bool IsInHForVisibility(IEnumerable<string> sceneNames, System.Func<string, bool> predicate, ChaControl chara) =>
+            System.Linq.Enumerable.Any(sceneNames, predicate) && !StudioHost.IsSceneCharacter(chara);
 
         #endregion
 
