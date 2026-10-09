@@ -21,7 +21,7 @@ namespace KKS_FreeHStudioSceneLoader
     {
         public const string GUID = "local.kks.freehstudiosceneloader";
         public const string PluginName = "Free H Studio Scene Loader (KKS port, experimental)";
-        public const string Version = "0.4.18";
+        public const string Version = "0.5.4";
 
         internal static new ManualLogSource Logger;
         internal static FreeHStudioSceneLoader Instance;
@@ -187,17 +187,20 @@ namespace KKS_FreeHStudioSceneLoader
 
         private void Update()
         {
+            ScanCardFiles();
             if (_freeH == null)
             {
                 _showWindow = false;
                 // During H the same key opens the window for the scene's characters
                 if (!StudioHost.HasPlacedScene) _showCharaWindow = false;
                 else if (WindowKey.Value.IsDown()) _showCharaWindow = !_showCharaWindow;
+                if (_cardTarget != null) LoadWantedThumbnails();
                 return;
             }
             if (_reloadRequested) { _files = null; _reloadRequested = false; ClearThumbnails(); }
             if (_showWindow) ScanSceneFiles();
             if (_showWindow) LoadWantedThumbnails();
+            else _cardTarget = null;
             if (WindowKey.Value.IsDown())
                 ToggleWindow();
         }
@@ -285,6 +288,8 @@ namespace KKS_FreeHStudioSceneLoader
                     _charaWindowRect = KeepOnScreen(GUILayout.Window(GUID.GetHashCode() + 1, _charaWindowRect, DrawCharaWindow, "スタジオシーンのキャラクター", WindowStyle, GUILayout.Width(440)));
                     _blockRects.Add(_charaWindowRect);
                 }
+                else _cardTarget = null;
+                DrawCardWindowIfOpen();
                 return;
             }
             if (ShowButton.Value) DrawOpenButton();
@@ -294,9 +299,156 @@ namespace KKS_FreeHStudioSceneLoader
             _windowRect.width = width;
             _windowRect = KeepOnScreen(GUILayout.Window(GUID.GetHashCode(), _windowRect, DrawWindow, "スタジオシーンをFree-Hのマップにする", WindowStyle, GUILayout.Width(width)));
             _blockRects.Add(_windowRect);
+            DrawCardWindowIfOpen();
         }
 
-        private const float WindowWidth = 1040f;
+        #region Card list (replacing a scene character)
+
+        private StudioHost.SceneCharacter _cardTarget;
+        private Rect _cardWindowRect = new Rect(120, 80, 640, 640);
+        private Vector2 _cardScroll;
+        private string _cardFilter = "";
+        private string _cardStatus;
+        private List<string> _cardFiles;
+        private string[] _cardPending;
+        private int _cardPendingIndex;
+        private bool? _cardListFemale;
+        /// <summary>The list shows coordinate cards (to put on) instead of character cards (to replace with).</summary>
+        private bool _cardCoordinates;
+        private bool? _cardListCoordinates;
+        private const int CardColumns = 4;
+        private const float CardListHeight = 520f;
+
+        private bool _focusCardWindow;
+
+        private void OpenCardWindow(StudioHost.SceneCharacter chara, bool coordinates)
+        {
+            _focusCardWindow = true; // also when it is already open behind another window
+            _cardTarget = chara;
+            _cardStatus = null;
+            _cardCoordinates = coordinates;
+            // Coordinate cards are the same list for both sexes
+            bool? female = coordinates ? (bool?)null : chara.Female;
+            if (_cardListCoordinates != coordinates || _cardListFemale != female)
+            {
+                _cardFiles = null;
+                _cardListCoordinates = coordinates;
+                _cardListFemale = female;
+                _cardScroll = Vector2.zero;
+            }
+        }
+
+        private void DrawCardWindowIfOpen()
+        {
+            if (_cardTarget == null) return;
+            if (!StudioHost.SceneCharacters.Contains(_cardTarget)) { _cardTarget = null; return; }
+            if (_focusCardWindow)
+            {
+                GUI.BringWindowToFront(GUID.GetHashCode() + 2);
+                GUI.FocusWindow(GUID.GetHashCode() + 2);
+                _focusCardWindow = false;
+            }
+            _cardWindowRect = KeepOnScreen(GUILayout.Window(GUID.GetHashCode() + 2, _cardWindowRect, DrawCardWindow,
+                _cardCoordinates ? "読み込むコーデカード" : $"差し替えるキャラカード（{(_cardTarget.Female ? "女性" : "男性")}）", WindowStyle, GUILayout.Width(_cardWindowRect.width)));
+            _blockRects.Add(_cardWindowRect);
+        }
+
+        /// <summary>Finds the cards a few files per frame (from Update), like the scene list.</summary>
+        private void ScanCardFiles()
+        {
+            if (_cardTarget == null) return;
+            if (_cardFiles == null)
+            {
+                var dir = _cardCoordinates ? StudioHost.CoordinateRoot : Path.Combine(StudioHost.CardRoot, _cardTarget.Female ? "female" : "male");
+                _cardPending = Directory.Exists(dir)
+                    ? Directory.GetFiles(dir, "*.png", SearchOption.AllDirectories).OrderByDescending(File.GetLastWriteTime).ToArray()
+                    : new string[0];
+                _cardPendingIndex = 0;
+                _cardFiles = new List<string>();
+            }
+            if (_cardPending == null) return;
+            var until = Time.realtimeSinceStartup + 0.02f;
+            while (_cardPendingIndex < _cardPending.Length && Time.realtimeSinceStartup < until)
+            {
+                var p = _cardPending[_cardPendingIndex++];
+                if (_cardCoordinates ? StudioHost.IsCoordinateCard(p) : StudioHost.IsCard(p)) _cardFiles.Add(p);
+            }
+            if (_cardPendingIndex >= _cardPending.Length) _cardPending = null;
+        }
+
+        private void DrawCardWindow(int id)
+        {
+            var chara = _cardTarget;
+            if (CloseButton(_cardWindowRect)) { _cardTarget = null; return; }
+            if (_cardCoordinates)
+                GUILayout.Label($"{(chara.Female ? "♀ " : "♂ ")}{chara.DisplayName}（{StudioHost.OutfitName(chara, StudioHost.OutfitType(chara))}）" +
+                                "　コーデカードをクリックすると、今の服の種類に読み込みます（シーンごとに保存）。");
+            else
+                GUILayout.Label($"{(chara.Female ? "♀ " : "♂ ")}{chara.Name}" + (chara.ReplacedName != null ? $"（今: {chara.ReplacedName}）" : "") +
+                                "　カードをクリックすると差し替えます。ポーズと服の状態はシーンのままです（シーンごとに保存）。");
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("絞り込み:", GUILayout.Width(60));
+            _cardFilter = GUILayout.TextField(_cardFilter);
+            if (GUILayout.Button("再読込", GUILayout.Width(70))) _cardFiles = null;
+            GUILayout.EndHorizontal();
+            if (_cardFiles == null || _cardPending != null)
+                GUILayout.Label($"カードを確認中… {_cardPendingIndex}/{_cardPending?.Length ?? 0}");
+            else
+                GUILayout.Label(_cardCoordinates
+                    ? $"UserData/coordinate のコーデカード: {_cardFiles.Count} 枚"
+                    : $"UserData/chara/{(chara.Female ? "female" : "male")} のカード: {_cardFiles.Count} 枚（コイカツサンシャインのカードのみ）");
+
+            _cardScroll = GUILayout.BeginScrollView(_cardScroll, GUILayout.Height(CardListHeight));
+            if (_cardFiles != null)
+            {
+                if (Event.current.type == EventType.Repaint && !(_showWindow && ShowThumbnails.Value)) _thumbWanted.Clear();
+                var files = _cardFiles.Where(f => _cardFilter.Length == 0 || f.IndexOf(_cardFilter, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+                float width = _cardWindowRect.width - 50f;
+                float cellW = (width - ThumbGap * (CardColumns - 1)) / CardColumns;
+                float imageH = cellW * 352f / 252f;
+                float cellH = imageH + ThumbLabelHeight + ThumbGap;
+                int rows = (files.Count + CardColumns - 1) / CardColumns;
+                var area = GUILayoutUtility.GetRect(width, rows * cellH, GUILayout.Width(width), GUILayout.Height(rows * cellH));
+                int firstRow = Mathf.Max(0, Mathf.FloorToInt(_cardScroll.y / cellH));
+                int lastRow = Mathf.Min(rows - 1, Mathf.CeilToInt((_cardScroll.y + CardListHeight) / cellH));
+                for (int row = firstRow; row <= lastRow; row++)
+                {
+                    for (int col = 0; col < CardColumns; col++)
+                    {
+                        int index = row * CardColumns + col;
+                        if (index >= files.Count) break;
+                        var f = files[index];
+                        var cell = new Rect(area.x + col * (cellW + ThumbGap), area.y + row * cellH, cellW, imageH + ThumbLabelHeight);
+                        if (GUI.Button(cell, GUIContent.none))
+                            _cardStatus = _cardCoordinates
+                                ? StudioHost.SetOutfitCard(chara, f) ?? $"{chara.DisplayName} にコーデ「{StudioHost.OutfitCardName(chara)}」を読み込みました。"
+                                : StudioHost.SetReplacement(chara, f) ?? $"{chara.Name} を「{chara.ReplacedName}」に差し替えました。";
+                        var imageRect = new Rect(cell.x + 2, cell.y + 2, cell.width - 4, imageH - 4);
+                        if (_thumbs.TryGetValue(f, out var tex) && tex != null)
+                        {
+                            if (Event.current.type == EventType.Repaint) GUI.DrawTexture(imageRect, tex, ScaleMode.ScaleToFit);
+                        }
+                        else if (!_thumbFailed.Contains(f) && Event.current.type == EventType.Repaint)
+                            _thumbWanted.Add(f);
+                        GUI.Label(new Rect(cell.x, cell.y + imageH - 2, cell.width, ThumbLabelHeight), Path.GetFileNameWithoutExtension(f), _thumbLabelStyle ?? GUI.skin.label);
+                    }
+                }
+            }
+            GUILayout.EndScrollView();
+            if (!string.IsNullOrEmpty(_cardStatus)) GUILayout.Label(_cardStatus);
+            GUILayout.BeginHorizontal();
+            if (!_cardCoordinates && chara.ReplacedName != null && GUILayout.Button("元のキャラに戻す", GUILayout.ExpandWidth(false)))
+                _cardStatus = StudioHost.SetReplacement(chara, null) ?? $"{chara.Name} に戻しました。";
+            if (_cardCoordinates && StudioHost.HasOutfit(chara) && GUILayout.Button("服を戻す", GUILayout.ExpandWidth(false)))
+                _cardStatus = StudioHost.ResetOutfit(chara) ?? $"{chara.Name} の服をシーンのままに戻しました。";
+            if (GUILayout.Button("閉じる", GUILayout.ExpandWidth(false))) _cardTarget = null;
+            GUILayout.EndHorizontal();
+            GUI.DragWindow();
+        }
+
+        #endregion
+
+        private const float WindowWidth = 1180f;
 
         private GUIStyle _windowStyle;
         private Texture2D _windowTexture;
@@ -530,7 +682,7 @@ namespace KKS_FreeHStudioSceneLoader
         /// <summary>Loads a few of the thumbnails the list wants to show (called from Update).</summary>
         private void LoadWantedThumbnails()
         {
-            if (!ShowThumbnails.Value || _thumbWanted.Count == 0) return;
+            if (_thumbWanted.Count == 0) return;
             var until = Time.realtimeSinceStartup + 0.012f;
             foreach (var path in _thumbWanted.ToList())
             {
@@ -668,6 +820,8 @@ namespace KKS_FreeHStudioSceneLoader
         }
 
         /// <summary>Which of the scene's characters are placed in H.</summary>
+        private StudioHost.SceneCharacter _outfitOpen;
+
         private void DrawCharacterChoice()
         {
             var charas = StudioHost.SceneCharacters;
@@ -676,17 +830,83 @@ namespace KKS_FreeHStudioSceneLoader
                 GUILayout.Label("このシーンにはキャラクターがいません。");
                 return;
             }
-            GUILayout.Label($"シーンのキャラクター（{charas.Count} 人）: チェックしたキャラクターを、スタジオのポーズのまま置きます。");
-            GUILayout.BeginHorizontal();
-            StudioHost.SetSexEnabled(true, GUILayout.Toggle(StudioHost.FemalesOn, $"女性を表示（{charas.Count(c => c.Female)} 人）"));
-            StudioHost.SetSexEnabled(false, GUILayout.Toggle(StudioHost.MalesOn, $"男性を表示（{charas.Count(c => !c.Female)} 人）"));
-            GUILayout.EndHorizontal();
-            foreach (var chara in charas)
+            GUILayout.Label($"シーンのキャラクター（{charas.Count} 人）: チェックしたキャラクターを、スタジオのポーズのまま置きます。「差し替え」で別のキャラカードにできます。");
+            foreach (var female in new[] { true, false })
             {
-                GUI.enabled = chara.Female ? StudioHost.FemalesOn : StudioHost.MalesOn;
-                StudioHost.SetCharacterEnabled(chara, GUILayout.Toggle(chara.Enabled, (chara.Female ? "♀ " : "♂ ") + chara.Name));
+                var list = charas.Where(c => c.Female == female).ToList();
+                if (list.Count == 0) continue;
+                bool on = female ? StudioHost.FemalesOn : StudioHost.MalesOn;
+                StudioHost.SetSexEnabled(female, GUILayout.Toggle(on, $"{(female ? "女性" : "男性")}を表示（{list.Count} 人）"));
+                GUI.enabled = female ? StudioHost.FemalesOn : StudioHost.MalesOn;
+                foreach (var chara in list)
+                {
+                    GUILayout.BeginHorizontal();
+                    GUILayout.Space(18);
+                    StudioHost.SetCharacterEnabled(chara, GUILayout.Toggle(chara.Enabled, (chara.Female ? "♀ " : "♂ ") + chara.Name + (chara.ReplacedName != null ? $" → {chara.ReplacedName}" : "")));
+                    DrawReplaceButtons(chara);
+                    bool open = _outfitOpen == chara;
+                    if (GUILayout.Button(open ? "服 ▲" : "服 ▼", GUILayout.ExpandWidth(false))) _outfitOpen = open ? null : chara;
+                    GUILayout.EndHorizontal();
+                    if (_outfitOpen == chara)
+                    {
+                        GUILayout.BeginHorizontal();
+                        GUILayout.Space(36);
+                        GUILayout.BeginVertical();
+                        bool enabled = GUI.enabled;
+                        DrawOutfitControls(chara);
+                        GUI.enabled = enabled;
+                        GUILayout.EndVertical();
+                        GUILayout.EndHorizontal();
+                    }
+                }
+                GUI.enabled = true;
             }
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("新しいシーンの初期設定:", GUILayout.ExpandWidth(false));
+            var females = GUILayout.Toggle(LoadFemales.Value, "女性を表示", GUILayout.ExpandWidth(false));
+            if (females != LoadFemales.Value) LoadFemales.Value = females;
+            var males = GUILayout.Toggle(LoadMales.Value, "男性を表示", GUILayout.ExpandWidth(false));
+            if (males != LoadMales.Value) LoadMales.Value = males;
+            GUILayout.EndHorizontal();
+            GUILayout.Label("（設定を一度も変えていないシーンに使います）");
+        }
+
+        /// <summary>A × at the top right of a window; true when it was pressed.</summary>
+        private static bool CloseButton(Rect window)
+        {
+            return GUI.Button(new Rect(window.width - 26, 3, 22, 18), "×");
+        }
+
+        /// <summary>The clothes of one scene character: the kind of clothes and a coordinate card (saved per scene).</summary>
+        private void DrawOutfitControls(StudioHost.SceneCharacter chara)
+        {
+            int type = StudioHost.OutfitType(chara);
+            int count = StudioHost.OutfitCount(chara);
+            var names = new string[count];
+            for (int i = 0; i < count; i++) names[i] = StudioHost.OutfitName(chara, i);
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("服の種類", GUILayout.Width(56));
+            // Four per row: the game's four, then the ones MoreOutfits added
+            int newType = GUILayout.SelectionGrid(Mathf.Clamp(type, 0, count - 1), names, 4);
+            if (newType != type) StudioHost.SetOutfitType(chara, newType);
+            GUILayout.EndHorizontal();
+            GUILayout.BeginHorizontal();
+            var card = StudioHost.OutfitCardName(chara);
+            GUILayout.Label(card != null ? $"コーデ: {card}" : "コーデ: キャラのまま", GUILayout.ExpandWidth(true));
+            if (GUILayout.Button("コーデを読み込む", GUILayout.ExpandWidth(false))) OpenCardWindow(chara, true);
+            GUI.enabled = GUI.enabled && StudioHost.HasOutfit(chara);
+            if (GUILayout.Button("服を戻す", GUILayout.ExpandWidth(false)))
+                _cardStatus = StudioHost.ResetOutfit(chara) ?? $"{chara.Name} の服をシーンのままに戻しました。";
             GUI.enabled = true;
+            GUILayout.EndHorizontal();
+        }
+
+        /// <summary>「差し替え」 (opens the card list) and 「戻す」 for one scene character.</summary>
+        private void DrawReplaceButtons(StudioHost.SceneCharacter chara)
+        {
+            if (GUILayout.Button("差し替え", GUILayout.ExpandWidth(false))) OpenCardWindow(chara, false);
+            if (chara.ReplacedName != null && GUILayout.Button("戻す", GUILayout.ExpandWidth(false)))
+                _cardStatus = StudioHost.SetReplacement(chara, null) ?? $"{chara.Name} に戻しました。";
         }
 
         /// <summary>The scene's sounds: when it is loaded (selection window) and while it is placed (H window). Saved per scene.</summary>
@@ -774,6 +994,7 @@ namespace KKS_FreeHStudioSceneLoader
             var placed = StudioHost.SceneCharacters.Where(c => c.Placed).ToList();
             if (_selectedChara == null || !placed.Contains(_selectedChara)) _selectedChara = placed.FirstOrDefault();
 
+            if (CloseButton(_charaWindowRect)) _showCharaWindow = false;
             GUILayout.Label($"表示のオンオフと、位置の調整ができます（{WindowKey.Value} キーで閉じる）");
             _charaScroll = GUILayout.BeginScrollView(_charaScroll, GUILayout.Height(Mathf.Min(placed.Count, 6) * 26 + 8));
             foreach (var chara in placed)
@@ -782,8 +1003,9 @@ namespace KKS_FreeHStudioSceneLoader
                 var visible = StudioHost.IsVisible(chara);
                 var newVisible = GUILayout.Toggle(visible, "表示", GUILayout.Width(56));
                 if (newVisible != visible) StudioHost.SetVisible(chara, newVisible);
-                var label = (chara.Female ? "♀ " : "♂ ") + chara.Name;
+                var label = (chara.Female ? "♀ " : "♂ ") + chara.DisplayName;
                 if (GUILayout.Button(label, chara == _selectedChara ? GUI.skin.box : GUI.skin.button)) _selectedChara = chara;
+                DrawReplaceButtons(chara);
                 GUILayout.EndHorizontal();
             }
             GUILayout.EndScrollView();
@@ -874,6 +1096,12 @@ namespace KKS_FreeHStudioSceneLoader
                 }
                 GUILayout.EndHorizontal();
                 GUILayout.Label("「カメラの注視点へ移動」: カメラを動かして、置きたい場所を画面の中心に合わせてから押してください。");
+            }
+            if (_selectedChara != null)
+            {
+                GUILayout.Label($"服（{_selectedChara.DisplayName}。シーンごとに保存します）:");
+                DrawOutfitControls(_selectedChara);
+                if (!string.IsNullOrEmpty(_cardStatus) && _cardTarget == null) GUILayout.Label(_cardStatus);
             }
             DrawLayoutSlots();
             GUILayout.Label("音（シーンごとに保存します）:");

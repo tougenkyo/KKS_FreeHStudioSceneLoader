@@ -32,6 +32,10 @@ namespace KKS_FreeHStudioSceneLoader
         public readonly SceneLayout[] Layouts = new SceneLayout[LayoutSlots];
         /// <summary>When the scene is placed in H, apply the layout saved last.</summary>
         public bool AutoLayout = true;
+        /// <summary>Characters replaced with another card, by dicKey.</summary>
+        public readonly Dictionary<int, CardReplacement> Replacements = new Dictionary<int, CardReplacement>();
+        /// <summary>Outfits chosen for characters, by dicKey.</summary>
+        public readonly Dictionary<int, CharaOutfit> Outfits = new Dictionary<int, CharaOutfit>();
 
         public const int LayoutSlots = 3;
 
@@ -62,6 +66,23 @@ namespace KKS_FreeHStudioSceneLoader
         public readonly Dictionary<int, LayoutPose> Characters = new Dictionary<int, LayoutPose>();
         /// <summary>Folders/items moved with linked characters, by dicKey: local position and rotation of the offset.</summary>
         public readonly Dictionary<int, LayoutPose> Offsets = new Dictionary<int, LayoutPose>();
+    }
+
+    internal class CardReplacement
+    {
+        /// <summary>The card, relative to UserData/chara (e.g. female/abc.png) or a full path outside it.</summary>
+        public string Card;
+        /// <summary>The name on the card, to show without reading it.</summary>
+        public string Name;
+    }
+
+    internal class CharaOutfit
+    {
+        /// <summary>The kind of clothes (ChaFileDefine.CoordinateType: 0 普段着, 1 水着, 2 パジャマ, 3 バスタオル), -1: the scene's.</summary>
+        public int Type = -1;
+        /// <summary>A coordinate card put on for <see cref="Type"/>, relative to UserData/coordinate (or a full path), or null.</summary>
+        public string Card;
+        public string Name;
     }
 
     internal class LayoutPose
@@ -204,6 +225,22 @@ namespace KKS_FreeHStudioSceneLoader
                     if (kv.Value.HiddenCharacters.Count > 0)
                         e.SetAttribute("hiddenCharacters", string.Join(",", kv.Value.HiddenCharacters.OrderBy(i => i).Select(i => i.ToString()).ToArray()));
                     WriteLayouts(e, kv.Value);
+                    foreach (var o in kv.Value.Outfits.OrderBy(o => o.Key))
+                    {
+                        if (o.Value.Type < 0 && string.IsNullOrEmpty(o.Value.Card)) continue;
+                        var oe = (XmlElement)e.AppendChild(doc.CreateElement("outfit"));
+                        oe.SetAttribute("key", o.Key.ToString());
+                        oe.SetAttribute("type", o.Value.Type.ToString());
+                        if (!string.IsNullOrEmpty(o.Value.Card)) oe.SetAttribute("card", o.Value.Card);
+                        if (!string.IsNullOrEmpty(o.Value.Name)) oe.SetAttribute("name", o.Value.Name);
+                    }
+                    foreach (var r in kv.Value.Replacements.OrderBy(r => r.Key))
+                    {
+                        var re = (XmlElement)e.AppendChild(doc.CreateElement("replace"));
+                        re.SetAttribute("key", r.Key.ToString());
+                        re.SetAttribute("card", r.Value.Card);
+                        if (!string.IsNullOrEmpty(r.Value.Name)) re.SetAttribute("name", r.Value.Name);
+                    }
                 }
                 var tmp = FilePath + ".tmp";
                 doc.Save(tmp);
@@ -243,6 +280,17 @@ namespace KKS_FreeHStudioSceneLoader
                     foreach (var s in e.GetAttribute("hiddenCharacters").Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
                         if (int.TryParse(s, out var key)) settings.HiddenCharacters.Add(key);
                     ReadLayouts(e, settings);
+                    foreach (XmlElement oe in e.ChildNodes.OfType<XmlElement>().Where(x => x.Name == "outfit"))
+                        if (int.TryParse(oe.GetAttribute("key"), out var okey))
+                            settings.Outfits[okey] = new CharaOutfit
+                            {
+                                Type = int.TryParse(oe.GetAttribute("type"), out var otype) ? otype : -1,
+                                Card = oe.HasAttribute("card") ? oe.GetAttribute("card") : null,
+                                Name = oe.HasAttribute("name") ? oe.GetAttribute("name") : null,
+                            };
+                    foreach (XmlElement re in e.ChildNodes.OfType<XmlElement>().Where(x => x.Name == "replace"))
+                        if (int.TryParse(re.GetAttribute("key"), out var rkey) && re.GetAttribute("card").Length > 0)
+                            settings.Replacements[rkey] = new CardReplacement { Card = re.GetAttribute("card"), Name = re.GetAttribute("name") };
                     _all[path] = settings;
                 }
             }

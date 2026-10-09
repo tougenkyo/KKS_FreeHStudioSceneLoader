@@ -39,6 +39,8 @@ namespace KKS_FreeHStudioSceneLoader
             /// <summary>Chosen to be loaded (the female/male switches apply on top of this).</summary>
             public bool Enabled = true;
             public OCIChar Oci;
+            /// <summary>The scene's own card of a placed character, saved before it was first replaced (to go back to).</summary>
+            public string OriginalCardFile;
             public Vector3 OriginalPos;
             public Vector3 OriginalRot;
             /// <summary>PVCopy's switches in the last frame, and its hand/foot bones with their positions before it ever ran.</summary>
@@ -47,6 +49,9 @@ namespace KKS_FreeHStudioSceneLoader
             public Vector3[] PvBoneDefaults;
 
             public bool Placed => Oci != null && Oci.charInfo != null;
+            /// <summary>The name of the card it is replaced with, or null.</summary>
+            public string ReplacedName => Settings != null && Settings.Replacements.TryGetValue(Info.dicKey, out var r) ? (string.IsNullOrEmpty(r.Name) ? System.IO.Path.GetFileNameWithoutExtension(r.Card) : r.Name) : null;
+            public string DisplayName => ReplacedName ?? Name;
         }
 
         private static readonly List<SceneCharacter> _sceneCharacters = new List<SceneCharacter>();
@@ -637,6 +642,7 @@ namespace KKS_FreeHStudioSceneLoader
                 }
                 // Items attached to the character load with it
                 RemoveSkippedChildren(info);
+                LoadReplacementCard(info);
                 var before = new HashSet<ChaControl>(Manager.Character.dictEntryChara.Values);
                 // Loading turns FK off when IK is on; the FKIK plugin restores both (see EnableFKIK)
                 bool fkAndIK = info.enableFK && info.enableIK;
@@ -657,6 +663,7 @@ namespace KKS_FreeHStudioSceneLoader
                     if (entry != null)
                     {
                         entry.Oci = oci;
+                        ApplyOutfit(entry);
                         entry.OriginalPos = info.changeAmount.pos;
                         entry.OriginalRot = info.changeAmount.rot;
                         SavePvCopy(entry);
@@ -796,6 +803,365 @@ namespace KKS_FreeHStudioSceneLoader
         }
 
         /// <summary>Plays each placed character's voice list from the start, like Studio's play button.</summary>
+        #region Replacing characters with other cards
+
+        internal static readonly string CardRoot = System.IO.Path.GetFullPath(System.IO.Path.Combine(BepInEx.Paths.GameRootPath, "UserData/chara"));
+
+        private static string CardPath(string card) => System.IO.Path.IsPathRooted(card) ? card : System.IO.Path.Combine(CardRoot, card);
+
+        private static string CardKey(string path)
+        {
+            var full = System.IO.Path.GetFullPath(path);
+            return full.StartsWith(CardRoot + System.IO.Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                ? full.Substring(CardRoot.Length + 1).Replace('\\', '/')
+                : full;
+        }
+
+        /// <summary>The card file a character is replaced with (null: none, or the file is gone).</summary>
+        private static string ReplacementFile(OICharInfo info)
+        {
+            if (Settings == null || !Settings.Replacements.TryGetValue(info.dicKey, out var r)) return null;
+            var path = CardPath(r.Card);
+            if (System.IO.File.Exists(path)) return path;
+            // Also asked while drawing the window: say it once
+            if (_missingCards.Add(path))
+                FreeHStudioSceneLoader.Logger.LogWarning($"Card to replace {info.charFile?.parameter?.fullname} with not found: {path}");
+            return null;
+        }
+
+        private static readonly HashSet<string> _missingCards = new HashSet<string>();
+
+        /// <summary>Before a character is created: reads the replacement card into its data (the scene's pose and state stay).</summary>
+        private static void LoadReplacementCard(OICharInfo info)
+        {
+            var path = ReplacementFile(info);
+            if (path == null) return;
+            try
+            {
+                var entry = _sceneCharacters.FirstOrDefault(c => c.Info == info);
+                if (entry != null) entry.OriginalCardFile = SaveOriginalCard(info);
+                // Like Studio's 「変更」 (OCIChar.ChangeChara): the card's looks, the scene's status (clothes, etc.)
+                if (info.charFile.LoadCharaFile(path, 255, true, true))
+                    FreeHStudioSceneLoader.Logger.LogInfo($"Character replaced with card {path}");
+                else
+                    FreeHStudioSceneLoader.Logger.LogWarning($"Could not read the card {path}");
+            }
+            catch (Exception ex)
+            {
+                FreeHStudioSceneLoader.Logger.LogWarning($"Could not replace the character with {path}: {ex.Message}");
+            }
+        }
+
+        /// <summary>Saves the scene's own card of a character to a file (with its extended data), to go back to.</summary>
+        private static string SaveOriginalCard(OICharInfo info)
+        {
+            var dir = System.IO.Path.Combine(BepInEx.Paths.CachePath, "FreeHStudioSceneLoader");
+            System.IO.Directory.CreateDirectory(dir);
+            var file = System.IO.Path.Combine(dir, $"scene_chara_{info.dicKey}.png");
+            using (var stream = System.IO.File.Create(file))
+                info.charFile.SaveCharaFile(stream, true);
+            return file;
+        }
+
+        /// <summary>Reads only the header of a file: a Koikatsu Sunshine character card.</summary>
+        internal static bool IsCard(string path)
+        {
+            try
+            {
+                using (var reader = new System.IO.BinaryReader(System.IO.File.OpenRead(path)))
+                {
+                    PngFile.SkipPng(reader);
+                    if (reader.BaseStream.Length - reader.BaseStream.Position < 8) return false;
+                    if (reader.ReadInt32() > 100) return false;
+                    return reader.ReadString() == "【KoiKatuCharaSun】";
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Replaces a scene character with a card (null: back to the scene's own), saved for the scene. A placed
+        /// character changes at once, like Studio's 「変更」; otherwise when it is next placed. Returns an error or null.
+        /// </summary>
+        internal static string SetReplacement(SceneCharacter chara, string path)
+        {
+            if (Settings == null) return "シーンが読み込まれていません。";
+            string name = null;
+            if (path != null)
+            {
+                var file = new ChaFileControl();
+                if (!file.LoadCharaFile(path, (byte)(chara.Female ? 1 : 0), true, true))
+                    return $"このカードは読み込めません（コイカツサンシャインの{(chara.Female ? "女性" : "男性")}キャラカードではありません）。";
+                name = file.parameter.fullname;
+                Settings.Replacements[chara.Info.dicKey] = new CardReplacement { Card = CardKey(path), Name = name };
+            }
+            else
+                Settings.Replacements.Remove(chara.Info.dicKey);
+            SaveSettings();
+            if (!chara.Placed) return null;
+
+            try
+            {
+                if (chara.OriginalCardFile == null) chara.OriginalCardFile = SaveOriginalCard(chara.Info);
+                ChangeCard(chara, path ?? chara.OriginalCardFile);
+            }
+            catch (Exception ex)
+            {
+                FreeHStudioSceneLoader.Logger.LogWarning($"Could not change the card of {chara.Name}: {ex}");
+                return "キャラクターを差し替えられませんでした（output_log.txt を確認してください）。";
+            }
+            return null;
+        }
+
+        private static void ChangeCard(SceneCharacter chara, string path)
+        {
+            var oci = chara.Oci;
+            bool fkAndIK = oci.oiCharInfo.enableFK && oci.oiCharInfo.enableIK;
+            bool fkSkirt = oci.oiCharInfo.activeFK[6];
+            IsLoadingCharacter = true; // the body uses Studio's bones, as when it was created
+            try
+            {
+                oci.ChangeChara(path);
+            }
+            finally
+            {
+                IsLoadingCharacter = false;
+            }
+            // ChangeChara turns FK back on alone; keep FK and IK together as when the character was placed
+            if (fkAndIK && FreeHStudioSceneLoader.ApplyFKAndIK.Value)
+            {
+                EnableFKIK(oci);
+                if (fkSkirt) oci.oiCharInfo.activeFK[6] = true;
+            }
+            ApplyScales();
+            FreeHStudioSceneLoader.Logger.LogInfo($"Scene character {chara.Name} now uses card {path} ({oci.charInfo.chaFile.parameter.fullname})");
+        }
+
+        #endregion
+
+        #region Outfits (kind of clothes, coordinate cards)
+
+        internal static readonly string CoordinateRoot = System.IO.Path.GetFullPath(System.IO.Path.Combine(BepInEx.Paths.GameRootPath, "UserData/coordinate"));
+        internal static readonly string[] OutfitTypeNames = { "普段着", "水着", "パジャマ", "バスタオル" };
+
+        // MoreOutfits (KK_Plugins, optional) adds outfit slots after the game's four and names them
+        private static System.Reflection.MethodInfo _moreOutfitsName;
+        private static string _moreOutfitsGuid;
+        private static bool _moreOutfitsChecked;
+
+        private static void FindMoreOutfits()
+        {
+            if (_moreOutfitsChecked) return;
+            _moreOutfitsChecked = true;
+            var plugin = HarmonyLib.AccessTools.TypeByName("KK_Plugins.MoreOutfits.Plugin");
+            if (plugin == null) return;
+            _moreOutfitsName = HarmonyLib.AccessTools.Method(plugin, "GetCoodinateName", new[] { typeof(ChaControl), typeof(int) });
+            _moreOutfitsGuid = HarmonyLib.AccessTools.Field(plugin, "PluginGUID")?.GetValue(null) as string;
+        }
+
+        /// <summary>How many outfits the character has (4, or more with MoreOutfits).</summary>
+        internal static int OutfitCount(SceneCharacter chara)
+        {
+            var file = chara.Placed ? chara.Oci.charInfo.chaFile : CardBeforePlacing(chara);
+            return Math.Max(OutfitTypeNames.Length, file?.coordinate?.Length ?? 0);
+        }
+
+        private static readonly Dictionary<string, ChaFileControl> _replacementCards = new Dictionary<string, ChaFileControl>();
+
+        /// <summary>
+        /// The card a character will be created from: the replacement card when there is one (read once and kept,
+        /// with its extended data, so its outfit slots and their names show before H), else the scene's.
+        /// </summary>
+        private static ChaFile CardBeforePlacing(SceneCharacter chara)
+        {
+            var path = ReplacementFile(chara.Info);
+            if (path == null) return chara.Info.charFile;
+            if (!_replacementCards.TryGetValue(path, out var file))
+            {
+                file = new ChaFileControl();
+                try
+                {
+                    if (!file.LoadCharaFile(path, 255, true, true)) file = null;
+                }
+                catch (Exception ex)
+                {
+                    FreeHStudioSceneLoader.Logger.LogDebug($"Could not read the card {path}: {ex.Message}");
+                    file = null;
+                }
+                _replacementCards[path] = file;
+            }
+            return (ChaFile)file ?? chara.Info.charFile;
+        }
+
+        /// <summary>The name of an outfit slot: the game's for the first four, MoreOutfits' for the ones it added.</summary>
+        internal static string OutfitName(SceneCharacter chara, int index)
+        {
+            if (index < OutfitTypeNames.Length) return OutfitTypeNames[index];
+            FindMoreOutfits();
+            try
+            {
+                if (chara.Placed && _moreOutfitsName != null)
+                {
+                    var name = _moreOutfitsName.Invoke(null, new object[] { chara.Oci.charInfo, index }) as string;
+                    if (!string.IsNullOrEmpty(name)) return name;
+                }
+                else if (!chara.Placed && _moreOutfitsGuid != null)
+                {
+                    // Not created yet: MoreOutfits keeps the names in the card's extended data
+                    var data = ExtensibleSaveFormat.ExtendedSave.GetExtendedDataById(CardBeforePlacing(chara), _moreOutfitsGuid);
+                    if (data?.data != null && data.data.TryGetValue("CoordinateNames", out var names) && names is System.Collections.IDictionary dict)
+                        foreach (System.Collections.DictionaryEntry e in dict)
+                            if (Convert.ToInt32(e.Key) == index && e.Value is string n && n.Length > 0) return n;
+                }
+            }
+            catch (Exception ex)
+            {
+                FreeHStudioSceneLoader.Logger.LogDebug($"MoreOutfits name of outfit {index}: {ex.Message}");
+            }
+            return $"追加の服 {index - OutfitTypeNames.Length + 1}";
+        }
+
+        private static CharaOutfit OutfitOf(SceneCharacter chara) =>
+            Settings != null && Settings.Outfits.TryGetValue(chara.Info.dicKey, out var o) ? o : null;
+
+        /// <summary>The kind of clothes the character wears now (placed) or will wear (chosen, else the scene's).</summary>
+        internal static int OutfitType(SceneCharacter chara)
+        {
+            if (chara.Placed) return chara.Oci.charInfo.fileStatus.coordinateType;
+            var o = OutfitOf(chara);
+            return o != null && o.Type >= 0 ? o.Type : chara.Info.charFile.status.coordinateType;
+        }
+
+        internal static string OutfitCardName(SceneCharacter chara)
+        {
+            var o = OutfitOf(chara);
+            if (o == null || string.IsNullOrEmpty(o.Card)) return null;
+            return string.IsNullOrEmpty(o.Name) ? System.IO.Path.GetFileNameWithoutExtension(o.Card) : o.Name;
+        }
+
+        internal static bool HasOutfit(SceneCharacter chara)
+        {
+            var o = OutfitOf(chara);
+            return o != null && (o.Type >= 0 || !string.IsNullOrEmpty(o.Card));
+        }
+
+        private static CharaOutfit EditOutfit(SceneCharacter chara)
+        {
+            if (!Settings.Outfits.TryGetValue(chara.Info.dicKey, out var o))
+                Settings.Outfits[chara.Info.dicKey] = o = new CharaOutfit();
+            return o;
+        }
+
+        /// <summary>Reads only the header of a file: a coordinate card.</summary>
+        internal static bool IsCoordinateCard(string path)
+        {
+            try
+            {
+                using (var reader = new System.IO.BinaryReader(System.IO.File.OpenRead(path)))
+                {
+                    PngFile.SkipPng(reader);
+                    if (reader.BaseStream.Length - reader.BaseStream.Position < 8) return false;
+                    if (reader.ReadInt32() > 100) return false;
+                    return reader.ReadString() == "【KoiKatuClothes】";
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>Changes the kind of clothes (Studio's 服の種類), saved for the scene.</summary>
+        internal static void SetOutfitType(SceneCharacter chara, int type)
+        {
+            if (Settings == null) return;
+            var o = EditOutfit(chara);
+            if (o.Type == type && (!chara.Placed || OutfitType(chara) == type)) return;
+            // A coordinate card belongs to the kind it was put on
+            if (o.Type != type) { o.Card = null; o.Name = null; }
+            o.Type = type;
+            SaveSettings();
+            if (chara.Placed) chara.Oci.SetCoordinateInfo((ChaFileDefine.CoordinateType)type, false);
+        }
+
+        /// <summary>Puts on a coordinate card for the current kind of clothes (Studio's 衣装の読み込み). Returns an error or null.</summary>
+        internal static string SetOutfitCard(SceneCharacter chara, string path)
+        {
+            if (Settings == null) return "シーンが読み込まれていません。";
+            var file = new ChaFileCoordinate();
+            if (!file.LoadFile(path)) return "このコーデカードは読み込めません。";
+            var o = EditOutfit(chara);
+            o.Type = OutfitType(chara);
+            var full = System.IO.Path.GetFullPath(path);
+            o.Card = full.StartsWith(CoordinateRoot + System.IO.Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                ? full.Substring(CoordinateRoot.Length + 1).Replace('\\', '/') : full;
+            o.Name = string.IsNullOrEmpty(file.coordinateName) ? System.IO.Path.GetFileNameWithoutExtension(path) : file.coordinateName;
+            SaveSettings();
+            if (!chara.Placed) return null;
+            try
+            {
+                if (chara.OriginalCardFile == null) chara.OriginalCardFile = SaveOriginalCard(chara.Info);
+                chara.Oci.LoadClothesFile(path);
+            }
+            catch (Exception ex)
+            {
+                FreeHStudioSceneLoader.Logger.LogWarning($"Could not put the coordinate {path} on {chara.Name}: {ex}");
+                return "コーデを読み込めませんでした（output_log.txt を確認してください）。";
+            }
+            return null;
+        }
+
+        /// <summary>Back to the scene's clothes: reads the character's card again (a coordinate card changed it).</summary>
+        internal static string ResetOutfit(SceneCharacter chara)
+        {
+            if (Settings == null) return null;
+            Settings.Outfits.Remove(chara.Info.dicKey);
+            SaveSettings();
+            if (!chara.Placed) return null;
+            try
+            {
+                var card = ReplacementFile(chara.Info) ?? chara.OriginalCardFile;
+                if (card != null) ChangeCard(chara, card);
+                chara.Oci.SetCoordinateInfo((ChaFileDefine.CoordinateType)chara.Info.charFile.status.coordinateType, true);
+            }
+            catch (Exception ex)
+            {
+                FreeHStudioSceneLoader.Logger.LogWarning($"Could not reset the clothes of {chara.Name}: {ex}");
+                return "服を戻せませんでした（output_log.txt を確認してください）。";
+            }
+            return null;
+        }
+
+        /// <summary>When a character was placed: the kind of clothes and the coordinate card chosen for it.</summary>
+        private static void ApplyOutfit(SceneCharacter chara)
+        {
+            var o = OutfitOf(chara);
+            if (o == null) return;
+            try
+            {
+                if (o.Type >= 0) chara.Oci.SetCoordinateInfo((ChaFileDefine.CoordinateType)o.Type, true);
+                if (string.IsNullOrEmpty(o.Card)) return;
+                var path = System.IO.Path.IsPathRooted(o.Card) ? o.Card : System.IO.Path.Combine(CoordinateRoot, o.Card);
+                if (!System.IO.File.Exists(path))
+                {
+                    FreeHStudioSceneLoader.Logger.LogWarning($"Coordinate card for {chara.Name} not found: {path}");
+                    return;
+                }
+                if (chara.OriginalCardFile == null && ReplacementFile(chara.Info) == null) chara.OriginalCardFile = SaveOriginalCard(chara.Info);
+                chara.Oci.LoadClothesFile(path);
+                FreeHStudioSceneLoader.Logger.LogInfo($"Coordinate {path} put on {chara.Name}");
+            }
+            catch (Exception ex)
+            {
+                FreeHStudioSceneLoader.Logger.LogWarning($"Could not set the clothes of {chara.Name}: {ex.Message}");
+            }
+        }
+
+        #endregion
+
         private static void StopVoices(OCIChar chara)
         {
             try
