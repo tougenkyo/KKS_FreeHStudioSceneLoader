@@ -24,7 +24,7 @@ Copy `KKS_FreeHStudioSceneLoader.dll` into `BepInEx/plugins/` (a subfolder such 
 
 ## Usage
 1. Open Free H. Click the "Choose a studio scene" button or press **F7** (both configurable).
-2. Wait for the studio lists to load (first time only). Scenes from `UserData/studio/scene` are listed as thumbnails or file names.
+2. Wait for the studio lists to load (first time only). Scenes from `UserData/studio/scene` are listed as thumbnails or file names. Another folder can be typed in or picked from the subfolders above the list (remembered in the config).
 3. Click a scene. This sets it for H, lists any mods it needs that are missing, and shows its settings. "Unset" goes back to the normal map.
 4. Start H as usual. The scene's items, folders, lights and characters are placed on the map.
 
@@ -86,6 +86,8 @@ Settings are in `BepInEx/config/local.kks.freehstudiosceneloader.cfg` (or the Co
 | Button | Show scene thumbnails | on | Also switched in the selection window |
 | Cards | Female card folder / Male card folder / Coordinate card folder | UserData/... | Folders of the card lists |
 | Cards | Include subfolders | on | |
+| Scenes | Scene folder | UserData/studio/scene | Folder of the scene list |
+| Scenes | Include subfolders | on | |
 | Diagnostics | Log character poses / Log scene lighting | off | For comparing with Studio |
 
 ## Building
@@ -112,7 +114,7 @@ Output: `bin/Release/KKS_FreeHStudioSceneLoader.dll`.
 
 ### 使い方
 1. フリーHの画面で「Choose a studio scene」（日本語表示では「スタジオシーンを選ぶ」）ボタンを押すか、F7 キーを押します。
-2. `UserData/studio/scene` のシーンが一覧になります（サムネイルとファイル名を切り替えられます）。
+2. `UserData/studio/scene` のシーンが一覧になります（サムネイルとファイル名を切り替えられます）。一覧の上で別のフォルダやサブフォルダを指定できます。
 3. シーンをクリックするとHにセットされ、足りないMODの確認と、シーンの設定が表示されます。「解除」で元のマップに戻ります。
 4. いつもどおりHを始めると、シーンのアイテム・フォルダ・ライト・キャラクターがマップに置かれます。
 

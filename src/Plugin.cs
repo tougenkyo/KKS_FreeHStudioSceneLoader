@@ -21,7 +21,7 @@ namespace KKS_FreeHStudioSceneLoader
     {
         public const string GUID = "local.kks.freehstudiosceneloader";
         public const string PluginName = "Free H Studio Scene Loader (KKS port, experimental)";
-        public const string Version = "0.6.1";
+        public const string Version = "0.6.2";
 
         internal static new ManualLogSource Logger;
         internal static FreeHStudioSceneLoader Instance;
@@ -34,6 +34,8 @@ namespace KKS_FreeHStudioSceneLoader
         internal static ConfigEntry<string> CardFolderMale;
         internal static ConfigEntry<string> CoordinateFolder;
         internal static ConfigEntry<bool> CardSubfolders;
+        internal static ConfigEntry<string> SceneFolder;
+        internal static ConfigEntry<bool> SceneSubfolders;
         internal static ConfigEntry<bool> LoadFemales;
         internal static ConfigEntry<bool> LoadMales;
         internal static ConfigEntry<bool> LoadLights;
@@ -80,6 +82,10 @@ namespace KKS_FreeHStudioSceneLoader
                 "Folder listed when loading a coordinate card (relative to the game folder, or a full path). Also chosen in the card window.");
             CardSubfolders = Config.Bind("Cards", "Include subfolders", true,
                 "List the cards in the subfolders of the chosen folder too.");
+            SceneFolder = Config.Bind("Scenes", "Scene folder", "UserData/studio/scene",
+                "Folder the scene list is read from (relative to the game folder, or a full path). Also chosen in the scene selection window.");
+            SceneSubfolders = Config.Bind("Scenes", "Include subfolders", true,
+                "List the scenes in the subfolders of the chosen folder too.");
             LoadFemales = Config.Bind("General", "Load studio female characters", true,
                 "Default for scenes not set up yet: also load the female characters of the studio scene, posed as in the scene. They are only decoration and do not take part in H. Each scene keeps its own setting once changed in the scene selection window.");
             LoadMales = Config.Bind("General", "Load studio male characters", true,
@@ -126,6 +132,22 @@ namespace KKS_FreeHStudioSceneLoader
                 "During H, show a button that opens the window for the scene's characters (same as the key).");
             ButtonInHPosition = Config.Bind("Button", "Button in H position", new Vector2(0.5f, 0.01f),
                 "Position of the button during H as a fraction of the screen size (x: 0 = left, 1 = right; y: 0 = top, 1 = bottom).");
+
+            _sceneFolder = new FolderChooser
+            {
+                Entry = () => SceneFolder,
+                IncludeSubfolders = SceneSubfolders,
+                Changed = () => { _reloadRequested = true; _scroll = Vector2.zero; },
+                Error = message => _status = message,
+                MaxRows = 2,
+            };
+            _cardFolder = new FolderChooser
+            {
+                Entry = () => CardFolderEntry,
+                IncludeSubfolders = CardSubfolders,
+                Changed = () => { _cardFiles = null; _cardScroll = Vector2.zero; _cardStatus = null; },
+                Error = message => _cardStatus = message,
+            };
 
             ApplyPatches();
             Logger.LogInfo($"{PluginName} {Version} loaded");
@@ -197,7 +219,7 @@ namespace KKS_FreeHStudioSceneLoader
 
         #region Scene selection window (Free H screen)
 
-        private static readonly string SceneRoot = Path.GetFullPath(Path.Combine(Paths.GameRootPath, "UserData/studio/scene"));
+        private FolderChooser _sceneFolder;
 
         private bool _showWindow;
         private Rect _windowRect = new Rect(40, 60, WindowWidth, 600);
@@ -382,12 +404,106 @@ namespace KKS_FreeHStudioSceneLoader
 
         private bool _focusCardWindow;
 
-        private string _cardFolderInput;
-        private string[] _cardSubfolders;
-        private Vector2 _cardFolderScroll;
+        private FolderChooser _cardFolder;
 
         /// <summary>The setting holding the folder of the list now shown (female cards, male cards or coordinates).</summary>
         private ConfigEntry<string> CardFolderEntry => _cardCoordinates ? CoordinateFolder : _cardTarget != null && _cardTarget.Female ? CardFolderFemale : CardFolderMale;
+
+        /// <summary>
+        /// The folder a list is read from, kept in a setting: typed in, one level up, back to the default, or one of
+        /// its subfolders; with or without the files in the subfolders.
+        /// </summary>
+        private sealed class FolderChooser
+        {
+            public Func<ConfigEntry<string>> Entry;
+            public ConfigEntry<bool> IncludeSubfolders;
+            /// <summary>The list has to be read again.</summary>
+            public Action Changed;
+            public Action<string> Error;
+            public int MaxRows = 3;
+            private const int Columns = 4;
+
+            private string _input;
+            private string[] _subfolders = new string[0];
+            private Vector2 _scroll;
+
+            public string Full => FullFolder(Entry().Value);
+
+            /// <summary>Shows the folder of the setting again (when the list switches to another setting).</summary>
+            public void Reset()
+            {
+                _input = Entry().Value;
+                _scroll = Vector2.zero;
+            }
+
+            /// <summary>The PNG files in the folder (and its subfolders when chosen), newest first; also lists the subfolders.</summary>
+            public string[] Scan()
+            {
+                if (_input == null) _input = Entry().Value;
+                var dir = Full;
+                try
+                {
+                    if (dir == null || !Directory.Exists(dir))
+                    {
+                        _subfolders = new string[0];
+                        return new string[0];
+                    }
+                    _subfolders = Directory.GetDirectories(dir).Select(Path.GetFileName).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToArray();
+                    return Directory.GetFiles(dir, "*.png", IncludeSubfolders.Value ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly)
+                        .OrderByDescending(File.GetLastWriteTime).ToArray();
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning($"Could not list the files in {dir}: {ex.Message}");
+                    _subfolders = new string[0];
+                    return new string[0];
+                }
+            }
+
+            private void Set(string full)
+            {
+                if (full == null || !Directory.Exists(full))
+                {
+                    Error(Tr("This folder does not exist.", "このフォルダはありません。"));
+                    return;
+                }
+                Entry().Value = ShortFolder(full);
+                _input = Entry().Value;
+                _scroll = Vector2.zero;
+                Changed();
+            }
+
+            public void Draw()
+            {
+                var entry = Entry();
+                var full = Full;
+                GUILayout.BeginHorizontal();
+                GUILayout.Label(Tr("Folder:", "フォルダ:"), GUILayout.Width(60));
+                _input = GUILayout.TextField(_input ?? entry.Value);
+                if (GUILayout.Button(Tr("Open", "開く"), GUILayout.ExpandWidth(false))) Set(FullFolder(_input));
+                if (GUILayout.Button(Tr("↑ Up", "↑ 上へ"), GUILayout.ExpandWidth(false)) && full != null)
+                {
+                    var parent = Path.GetDirectoryName(full);
+                    if (parent != null) Set(parent);
+                }
+                if (GUILayout.Button(Tr("Default", "既定"), GUILayout.ExpandWidth(false))) Set(FullFolder((string)entry.DefaultValue));
+                GUILayout.EndHorizontal();
+                var sub = GUILayout.Toggle(IncludeSubfolders.Value, Tr("Include subfolders", "サブフォルダも表示"), GUILayout.ExpandWidth(false));
+                if (sub != IncludeSubfolders.Value)
+                {
+                    IncludeSubfolders.Value = sub;
+                    Changed();
+                }
+                if (_subfolders.Length > 0)
+                {
+                    int rows = (_subfolders.Length + Columns - 1) / Columns;
+                    _scroll = GUILayout.BeginScrollView(_scroll, GUILayout.Height(Mathf.Min(rows, MaxRows) * 24f + 6f));
+                    int chosen = GUILayout.SelectionGrid(-1, _subfolders, Columns);
+                    GUILayout.EndScrollView();
+                    if (chosen >= 0 && full != null) Set(Path.Combine(full, _subfolders[chosen]));
+                }
+            }
+        }
 
         private static string FullFolder(string folder)
         {
@@ -402,21 +518,6 @@ namespace KKS_FreeHStudioSceneLoader
             return full.StartsWith(root, StringComparison.OrdinalIgnoreCase) ? full.Substring(root.Length).Replace('\\', '/') : full;
         }
 
-        private void SetCardFolder(string full)
-        {
-            if (full == null || !Directory.Exists(full))
-            {
-                _cardStatus = Tr("This folder does not exist.", "このフォルダはありません。");
-                return;
-            }
-            CardFolderEntry.Value = ShortFolder(full);
-            _cardFolderInput = CardFolderEntry.Value;
-            _cardFiles = null;
-            _cardScroll = Vector2.zero;
-            _cardFolderScroll = Vector2.zero;
-            _cardStatus = null;
-        }
-
         private void OpenCardWindow(StudioHost.SceneCharacter chara, bool coordinates)
         {
             _focusCardWindow = true; // also when it is already open behind another window
@@ -428,8 +529,7 @@ namespace KKS_FreeHStudioSceneLoader
             if (_cardListCoordinates != coordinates || _cardListFemale != female)
             {
                 _cardFiles = null;
-                _cardFolderInput = CardFolderEntry.Value;
-                _cardFolderScroll = Vector2.zero;
+                _cardFolder.Reset();
                 _cardListCoordinates = coordinates;
                 _cardListFemale = female;
                 _cardScroll = Vector2.zero;
@@ -457,22 +557,7 @@ namespace KKS_FreeHStudioSceneLoader
             if (_cardTarget == null) return;
             if (_cardFiles == null)
             {
-                var dir = FullFolder(CardFolderEntry.Value);
-                bool exists = dir != null && Directory.Exists(dir);
-                try
-                {
-                    _cardPending = exists
-                        ? Directory.GetFiles(dir, "*.png", CardSubfolders.Value ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly).OrderByDescending(File.GetLastWriteTime).ToArray()
-                        : new string[0];
-                    _cardSubfolders = exists ? Directory.GetDirectories(dir).Select(Path.GetFileName).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToArray() : new string[0];
-                }
-                catch (Exception ex)
-                {
-                    Logger.LogWarning($"Could not list the cards in {dir}: {ex.Message}");
-                    _cardPending = new string[0];
-                    _cardSubfolders = new string[0];
-                }
-                if (_cardFolderInput == null) _cardFolderInput = CardFolderEntry.Value;
+                _cardPending = _cardFolder.Scan();
                 _cardPendingIndex = 0;
                 _cardFiles = new List<string>();
             }
@@ -484,37 +569,6 @@ namespace KKS_FreeHStudioSceneLoader
                 if (_cardCoordinates ? StudioHost.IsCoordinateCard(p) : StudioHost.IsCard(p)) _cardFiles.Add(p);
             }
             if (_cardPendingIndex >= _cardPending.Length) _cardPending = null;
-        }
-
-        /// <summary>The folder the cards are listed from: typed in, up one level, back to the default, or a subfolder.</summary>
-        private void DrawCardFolder()
-        {
-            var entry = CardFolderEntry;
-            var full = FullFolder(entry.Value);
-            GUILayout.BeginHorizontal();
-            GUILayout.Label(Tr("Folder:", "フォルダ:"), GUILayout.Width(60));
-            _cardFolderInput = GUILayout.TextField(_cardFolderInput ?? entry.Value);
-            if (GUILayout.Button(Tr("Open", "開く"), GUILayout.ExpandWidth(false))) SetCardFolder(FullFolder(_cardFolderInput));
-            if (GUILayout.Button(Tr("↑ Up", "↑ 上へ"), GUILayout.ExpandWidth(false)) && full != null)
-            {
-                var parent = Path.GetDirectoryName(full);
-                if (parent != null) SetCardFolder(parent);
-            }
-            if (GUILayout.Button(Tr("Default", "既定"), GUILayout.ExpandWidth(false))) SetCardFolder(FullFolder((string)entry.DefaultValue));
-            GUILayout.EndHorizontal();
-            GUILayout.BeginHorizontal();
-            var sub = GUILayout.Toggle(CardSubfolders.Value, Tr("Include subfolders", "サブフォルダも表示"), GUILayout.ExpandWidth(false));
-            if (sub != CardSubfolders.Value) { CardSubfolders.Value = sub; _cardFiles = null; }
-            GUILayout.EndHorizontal();
-            if (_cardSubfolders != null && _cardSubfolders.Length > 0)
-            {
-                const int columns = 4;
-                int rows = (_cardSubfolders.Length + columns - 1) / columns;
-                _cardFolderScroll = GUILayout.BeginScrollView(_cardFolderScroll, GUILayout.Height(Mathf.Min(rows, 3) * 24f + 6f));
-                int chosen = GUILayout.SelectionGrid(-1, _cardSubfolders, columns);
-                GUILayout.EndScrollView();
-                if (chosen >= 0 && full != null) SetCardFolder(Path.Combine(full, _cardSubfolders[chosen]));
-            }
         }
 
         private void DrawCardWindow(int id)
@@ -533,7 +587,7 @@ namespace KKS_FreeHStudioSceneLoader
             _cardFilter = GUILayout.TextField(_cardFilter);
             if (GUILayout.Button(Tr("Reload", "再読込"), GUILayout.Width(70))) _cardFiles = null;
             GUILayout.EndHorizontal();
-            DrawCardFolder();
+            _cardFolder.Draw();
             if (_cardFiles == null || _cardPending != null)
                 GUILayout.Label(Tr($"Checking cards… {_cardPendingIndex}/{_cardPending?.Length ?? 0}", $"カードを確認中… {_cardPendingIndex}/{_cardPending?.Length ?? 0}"));
             else
@@ -703,6 +757,7 @@ namespace KKS_FreeHStudioSceneLoader
             _filter = GUILayout.TextField(_filter);
             if (GUILayout.Button(Tr("Reload", "再読込"), GUILayout.Width(70))) _reloadRequested = true;
             GUILayout.EndHorizontal();
+            _sceneFolder.Draw();
 
             if (_pending != null)
                 GUILayout.Label(Tr($"Checking scene files… {_pendingIndex}/{_pending.Length} (PNGs that are not scenes are not listed)", $"シーンファイルを確認中… {_pendingIndex}/{_pending.Length}（シーン以外のPNGは表示しません）"));
@@ -755,8 +810,12 @@ namespace KKS_FreeHStudioSceneLoader
         private const float PreviewHeight = 180f;
         private float CurrentListHeight => ShowThumbnails.Value ? ListHeight + PreviewHeight + 4f : ListHeight;
 
+        /// <summary>The folder the listed scenes were read from (their names are shown relative to it).</summary>
+        private string _sceneListRoot = "";
+
         private string ListName(string path) =>
-            (SceneFile.IsKoikatsuFormat(path) ? "[KK] " : "[KKS] ") + path.Substring(SceneRoot.Length).TrimStart('\\', '/');
+            (SceneFile.IsKoikatsuFormat(path) ? "[KK] " : "[KKS] ") +
+            (path.StartsWith(_sceneListRoot, StringComparison.OrdinalIgnoreCase) ? path.Substring(_sceneListRoot.Length) : path).TrimStart('\\', '/');
 
         #region Scene thumbnails
 
@@ -1124,9 +1183,8 @@ namespace KKS_FreeHStudioSceneLoader
             if (!StudioHost.IsReady) return;
             if (_files == null)
             {
-                _pending = Directory.Exists(SceneRoot)
-                    ? Directory.GetFiles(SceneRoot, "*.png", SearchOption.AllDirectories).OrderByDescending(File.GetLastWriteTime).ToArray()
-                    : new string[0];
+                _pending = _sceneFolder.Scan();
+                _sceneListRoot = _sceneFolder.Full ?? "";
                 _pendingIndex = 0;
                 _files = new List<string>();
             }
