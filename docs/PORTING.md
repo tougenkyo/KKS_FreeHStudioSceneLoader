@@ -122,6 +122,7 @@ KKSのゲーム側の処理（`[MODDING] Tools` の dnSpy.Console で逆コン�
 | 0.5.7 | H の窓をつかんで動かすと、ゲームの画面（カメラ）も回る。窓が縦に長いと画面からはみ出す | H のカメラ（BaseCameraControl_Ver2）は Input.GetMouseButton を直接読み、UI の上かどうかを見ない（uGUI を止める GuiBlocker も効かない）。マウスがプラグインの窓・ボタンの上にあるとき、またはそこで押したボタンを押している間は、InputMouseProc と InputMouseWheelZoomProc を false にする（窓の範囲は OnGUI の Repaint で集め、押したかどうかは Update で見る）。H の窓の中身を、画面の高さ - 60 を上限にしたスクロールビューに入れる |
 | 0.5.8 | 0.5.7 のスクロールで H の窓が小さくなり、横スクロールバーも出て右が切れる | スクロールビューの高さを、前の Repaint で測った中身の高さ（画面の高さ - 60 まで）にする。中身の幅を元の窓の幅に固定し、窓をスクロールバーの分（18）だけ広げる。横スクロールバーは出さない |
 | 0.5.9 | H の窓で、キャラの行の「戻す」と「シーン全体」が右端で少し切れる | H の窓の中身の幅を 440 から 490 にする |
+| 0.6.0 | 公開の準備 | H のたびにライトの調査結果をログと BepInEx/FreeHStudioLighting_H.txt に書いていたのを、設定 Diagnostics / Log scene lighting（既定オフ）のときだけにする。README を今の機能に合わせて書き直す（導入方法、機能、設定、制限、日本語の概要）。前提プラグインの記載を、実際に使っている Sideloader と ExtensibleSaveFormat に直す（KKAPI は使っていない）。DLL に埋め込む PDB にこの PC のフォルダ名が入らないよう、csproj に PathMap を設定する。リリース用の zip（BepInEx/plugins/KKS_FreeHStudioSceneLoader/ に DLL・LICENSE・README・THIRD-PARTY-NOTICES）を dist/ に作る（dist/ は git の対象外）。テストに使ったシーンのファイル名を、表と SceneAnimation.cs のコメントから消し、シーン A〜G に置き換える |
 
 ### 未確認・既知の制限
-- 目に見えるアイテム（家具など）の位置・色・マテリアルの再現は、まだ確認していない
+- 目に見えるアイテム（家具など）の位置・色・マテリアルの再現：確認済み（マップのないシーンと、アイテムの多いシーンで、Studio とほぼ同じに見えることを確認。2026-10-10）

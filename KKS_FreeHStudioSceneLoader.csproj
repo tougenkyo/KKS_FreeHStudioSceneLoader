@@ -8,6 +8,8 @@
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <DebugType>embedded</DebugType>
+    <!-- Keep the local folder out of the embedded PDB (source paths start at the project folder) -->
+    <PathMap>$(MSBuildProjectDirectory)=KKS_FreeHStudioSceneLoader</PathMap>
     <!-- Emits SkipVerification/UnverifiableCode so Mono allows access to members made public by the publicized reference assemblies -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>

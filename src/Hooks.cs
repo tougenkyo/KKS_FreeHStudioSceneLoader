@@ -141,6 +141,7 @@ namespace KKS_FreeHStudioSceneLoader
             StudioHost.ApplySavedLayout();
 
             // Diagnostics: compare with the same scene in CharaStudio (StudioPoseProbe logs the same lines there)
+            if (!FreeHStudioSceneLoader.LogLighting.Value) yield break;
             yield return new WaitForSeconds(3f);
             if (proc == null || !StudioHost.HasPlacedScene) yield break;
             try

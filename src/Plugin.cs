@@ -21,7 +21,7 @@ namespace KKS_FreeHStudioSceneLoader
     {
         public const string GUID = "local.kks.freehstudiosceneloader";
         public const string PluginName = "Free H Studio Scene Loader (KKS port, experimental)";
-        public const string Version = "0.5.9";
+        public const string Version = "0.6.0";
 
         internal static new ManualLogSource Logger;
         internal static FreeHStudioSceneLoader Instance;
@@ -33,6 +33,7 @@ namespace KKS_FreeHStudioSceneLoader
         internal static ConfigEntry<bool> ApplyPoseEditor;
         internal static ConfigEntry<bool> ApplyFKAndIK;
         internal static ConfigEntry<bool> LogPoses;
+        internal static ConfigEntry<bool> LogLighting;
         internal static ConfigEntry<KeyboardShortcut> WindowKey;
         internal static ConfigEntry<bool> PlaySoundItems;
         internal static ConfigEntry<bool> PlayCharaVoices;
@@ -68,6 +69,8 @@ namespace KKS_FreeHStudioSceneLoader
                 "Characters saved with FK and IK on at the same time (studio plugin \"FK and IK\", which only runs in CharaStudio) get both again, instead of IK only.");
             LogPoses = Config.Bind("Diagnostics", "Log character poses", false,
                 "Every 2 seconds during H, write the bone values, IK targets and FK/IK state of the studio scene's characters to the log and to BepInEx/FreeHStudioProbe.log (for comparing with Studio).");
+            LogLighting = Config.Bind("Diagnostics", "Log scene lighting", false,
+                "3 seconds after a studio scene is placed in H, write the lights, ambient light and graphic settings that light its items to the log and to BepInEx/FreeHStudioLighting_H.txt (for comparing with Studio).");
             PlaySoundItems = Config.Bind("General", "Play studio sound items", true,
                 "Default for scenes not set up yet: play sound/voice items placed in the studio scene (they start playing as soon as the scene is loaded). Each scene keeps its own setting once changed in the windows.");
             PlayCharaVoices = Config.Bind("General", "Play character voice lists", false,
