@@ -21,11 +21,19 @@ namespace KKS_FreeHStudioSceneLoader
     {
         public const string GUID = "local.kks.freehstudiosceneloader";
         public const string PluginName = "Free H Studio Scene Loader (KKS port, experimental)";
-        public const string Version = "0.6.0";
+        public const string Version = "0.6.1";
 
         internal static new ManualLogSource Logger;
         internal static FreeHStudioSceneLoader Instance;
 
+        public enum UiLanguage { English, Japanese }
+
+        internal static ConfigEntry<UiLanguage> Language;
+        internal static ConfigEntry<bool> ScenePoints;
+        internal static ConfigEntry<string> CardFolderFemale;
+        internal static ConfigEntry<string> CardFolderMale;
+        internal static ConfigEntry<string> CoordinateFolder;
+        internal static ConfigEntry<bool> CardSubfolders;
         internal static ConfigEntry<bool> LoadFemales;
         internal static ConfigEntry<bool> LoadMales;
         internal static ConfigEntry<bool> LoadLights;
@@ -50,11 +58,28 @@ namespace KKS_FreeHStudioSceneLoader
         internal static ConfigEntry<bool> ShowButton;
         internal static ConfigEntry<Vector2> ButtonPosition;
 
+        internal static bool Japanese => Language != null && Language.Value == UiLanguage.Japanese;
+
+        /// <summary>The text in the chosen language (General / Language).</summary>
+        internal static string Tr(string en, string ja) => Japanese ? ja : en;
+
         private void Awake()
         {
             Instance = this;
             Logger = base.Logger;
 
+            Language = Config.Bind("General", "Language", UiLanguage.English,
+                "Language of the plugin's windows and messages (also switched with the button at the top right of the windows).");
+            ScenePoints = Config.Bind("General", "H points at studio characters", true,
+                "In H, the point move menu (場所移動) also offers the places where the studio scene's characters stand, under every kind of point the map has.");
+            CardFolderFemale = Config.Bind("Cards", "Female card folder", "UserData/chara/female",
+                "Folder listed when replacing a female scene character (relative to the game folder, or a full path). Also chosen in the card window.");
+            CardFolderMale = Config.Bind("Cards", "Male card folder", "UserData/chara/male",
+                "Folder listed when replacing a male scene character (relative to the game folder, or a full path). Also chosen in the card window.");
+            CoordinateFolder = Config.Bind("Cards", "Coordinate card folder", "UserData/coordinate",
+                "Folder listed when loading a coordinate card (relative to the game folder, or a full path). Also chosen in the card window.");
+            CardSubfolders = Config.Bind("Cards", "Include subfolders", true,
+                "List the cards in the subfolders of the chosen folder too.");
             LoadFemales = Config.Bind("General", "Load studio female characters", true,
                 "Default for scenes not set up yet: also load the female characters of the studio scene, posed as in the scene. They are only decoration and do not take part in H. Each scene keeps its own setting once changed in the scene selection window.");
             LoadMales = Config.Bind("General", "Load studio male characters", true,
@@ -96,7 +121,7 @@ namespace KKS_FreeHStudioSceneLoader
             WindowOpacity = Config.Bind("Button", "Window background opacity", 0.85f,
                 new ConfigDescription("Opacity of the dark background of the plugin's windows (0 = transparent, 1 = opaque).", new AcceptableValueRange<float>(0.3f, 1f)));
             ShowThumbnails = Config.Bind("Button", "Show scene thumbnails", true,
-                "Show the scene list as thumbnails (3 per row) instead of file names. Also switched with the checkbox next to 解除.");
+                "Show the scene list as thumbnails (3 per row) instead of file names. Also switched with the checkbox next to Unset (解除).");
             ShowButtonInH = Config.Bind("Button", "Show button in H", true,
                 "During H, show a button that opens the window for the scene's characters (same as the key).");
             ButtonInHPosition = Config.Bind("Button", "Button in H position", new Vector2(0.5f, 0.01f),
@@ -235,7 +260,7 @@ namespace KKS_FreeHStudioSceneLoader
             if (path != null && File.Exists(path))
                 StartCoroutine(SetSceneAgain(freeH, path));
             else
-                Logger.LogMessage($"スタジオシーン読み込み: ボタンか {WindowKey.Value} キーでシーンを選べます");
+                Logger.LogMessage(Tr($"Studio scene loader: choose a scene with the button or the {WindowKey.Value} key", $"スタジオシーン読み込み: ボタンか {WindowKey.Value} キーでシーンを選べます"));
         }
 
         /// <summary>
@@ -255,8 +280,8 @@ namespace KKS_FreeHStudioSceneLoader
             {
                 ChooseScene(path);
                 Logger.LogMessage(Selection.IsSelected
-                    ? $"スタジオシーン「{Path.GetFileNameWithoutExtension(path)}」をもう一度セットしました（{WindowKey.Value} キーで変更できます）"
-                    : $"スタジオシーン「{Path.GetFileNameWithoutExtension(path)}」をもう一度セットできませんでした: {_status}");
+                    ? Tr($"Studio scene \"{Path.GetFileNameWithoutExtension(path)}\" set again (change it with the {WindowKey.Value} key)", $"スタジオシーン「{Path.GetFileNameWithoutExtension(path)}」をもう一度セットしました（{WindowKey.Value} キーで変更できます）")
+                    : Tr($"Could not set the studio scene \"{Path.GetFileNameWithoutExtension(path)}\" again: {_status}", $"スタジオシーン「{Path.GetFileNameWithoutExtension(path)}」をもう一度セットできませんでした: {_status}"));
             }
             catch (Exception ex)
             {
@@ -316,12 +341,12 @@ namespace KKS_FreeHStudioSceneLoader
                 if (!StudioHost.HasPlacedScene) return;
                 if (ShowButtonInH.Value)
                 {
-                    var label = _showCharaWindow ? $"スタジオシーンのキャラクターを閉じる ({WindowKey.Value})" : $"スタジオシーンのキャラクター ({WindowKey.Value})";
+                    var label = _showCharaWindow ? Tr($"Close studio scene characters ({WindowKey.Value})", $"スタジオシーンのキャラクターを閉じる ({WindowKey.Value})") : Tr($"Studio scene characters ({WindowKey.Value})", $"スタジオシーンのキャラクター ({WindowKey.Value})");
                     if (DrawButton(label, ButtonInHPosition.Value)) _showCharaWindow = !_showCharaWindow;
                 }
                 if (_showCharaWindow)
                 {
-                    _charaWindowRect = KeepOnScreen(GUILayout.Window(GUID.GetHashCode() + 1, _charaWindowRect, DrawCharaWindow, "スタジオシーンのキャラクター", WindowStyle, GUILayout.Width(CharaWindowWidth + ScrollbarWidth)));
+                    _charaWindowRect = KeepOnScreen(GUILayout.Window(GUID.GetHashCode() + 1, _charaWindowRect, DrawCharaWindow, Tr("Studio scene characters", "スタジオシーンのキャラクター"), WindowStyle, GUILayout.Width(CharaWindowWidth + ScrollbarWidth)));
                     _blockRects.Add(_charaWindowRect);
                 }
                 else _cardTarget = null;
@@ -333,7 +358,7 @@ namespace KKS_FreeHStudioSceneLoader
             // Two columns: the scene list on the left, the chosen scene's settings on the right
             float width = Mathf.Min(WindowWidth, Screen.width - 20);
             _windowRect.width = width;
-            _windowRect = KeepOnScreen(GUILayout.Window(GUID.GetHashCode(), _windowRect, DrawWindow, "スタジオシーンをFree-Hのマップにする", WindowStyle, GUILayout.Width(width)));
+            _windowRect = KeepOnScreen(GUILayout.Window(GUID.GetHashCode(), _windowRect, DrawWindow, Tr("Use a studio scene as the Free H map", "スタジオシーンをFree-Hのマップにする"), WindowStyle, GUILayout.Width(width)));
             _blockRects.Add(_windowRect);
             DrawCardWindowIfOpen();
         }
@@ -357,6 +382,41 @@ namespace KKS_FreeHStudioSceneLoader
 
         private bool _focusCardWindow;
 
+        private string _cardFolderInput;
+        private string[] _cardSubfolders;
+        private Vector2 _cardFolderScroll;
+
+        /// <summary>The setting holding the folder of the list now shown (female cards, male cards or coordinates).</summary>
+        private ConfigEntry<string> CardFolderEntry => _cardCoordinates ? CoordinateFolder : _cardTarget != null && _cardTarget.Female ? CardFolderFemale : CardFolderMale;
+
+        private static string FullFolder(string folder)
+        {
+            try { return Path.GetFullPath(Path.IsPathRooted(folder) ? folder : Path.Combine(Paths.GameRootPath, folder)); }
+            catch { return null; }
+        }
+
+        /// <summary>The folder as it is shown and saved: relative to the game folder when inside it.</summary>
+        private static string ShortFolder(string full)
+        {
+            var root = Path.GetFullPath(Paths.GameRootPath).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            return full.StartsWith(root, StringComparison.OrdinalIgnoreCase) ? full.Substring(root.Length).Replace('\\', '/') : full;
+        }
+
+        private void SetCardFolder(string full)
+        {
+            if (full == null || !Directory.Exists(full))
+            {
+                _cardStatus = Tr("This folder does not exist.", "このフォルダはありません。");
+                return;
+            }
+            CardFolderEntry.Value = ShortFolder(full);
+            _cardFolderInput = CardFolderEntry.Value;
+            _cardFiles = null;
+            _cardScroll = Vector2.zero;
+            _cardFolderScroll = Vector2.zero;
+            _cardStatus = null;
+        }
+
         private void OpenCardWindow(StudioHost.SceneCharacter chara, bool coordinates)
         {
             _focusCardWindow = true; // also when it is already open behind another window
@@ -368,6 +428,8 @@ namespace KKS_FreeHStudioSceneLoader
             if (_cardListCoordinates != coordinates || _cardListFemale != female)
             {
                 _cardFiles = null;
+                _cardFolderInput = CardFolderEntry.Value;
+                _cardFolderScroll = Vector2.zero;
                 _cardListCoordinates = coordinates;
                 _cardListFemale = female;
                 _cardScroll = Vector2.zero;
@@ -385,7 +447,7 @@ namespace KKS_FreeHStudioSceneLoader
                 _focusCardWindow = false;
             }
             _cardWindowRect = KeepOnScreen(GUILayout.Window(GUID.GetHashCode() + 2, _cardWindowRect, DrawCardWindow,
-                _cardCoordinates ? "読み込むコーデカード" : $"差し替えるキャラカード（{(_cardTarget.Female ? "女性" : "男性")}）", WindowStyle, GUILayout.Width(_cardWindowRect.width)));
+                _cardCoordinates ? Tr("Coordinate card to load", "読み込むコーデカード") : Tr($"Character card to replace with ({(_cardTarget.Female ? "female" : "male")})", $"差し替えるキャラカード（{(_cardTarget.Female ? "女性" : "男性")}）"), WindowStyle, GUILayout.Width(_cardWindowRect.width)));
             _blockRects.Add(_cardWindowRect);
         }
 
@@ -395,10 +457,22 @@ namespace KKS_FreeHStudioSceneLoader
             if (_cardTarget == null) return;
             if (_cardFiles == null)
             {
-                var dir = _cardCoordinates ? StudioHost.CoordinateRoot : Path.Combine(StudioHost.CardRoot, _cardTarget.Female ? "female" : "male");
-                _cardPending = Directory.Exists(dir)
-                    ? Directory.GetFiles(dir, "*.png", SearchOption.AllDirectories).OrderByDescending(File.GetLastWriteTime).ToArray()
-                    : new string[0];
+                var dir = FullFolder(CardFolderEntry.Value);
+                bool exists = dir != null && Directory.Exists(dir);
+                try
+                {
+                    _cardPending = exists
+                        ? Directory.GetFiles(dir, "*.png", CardSubfolders.Value ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly).OrderByDescending(File.GetLastWriteTime).ToArray()
+                        : new string[0];
+                    _cardSubfolders = exists ? Directory.GetDirectories(dir).Select(Path.GetFileName).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToArray() : new string[0];
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning($"Could not list the cards in {dir}: {ex.Message}");
+                    _cardPending = new string[0];
+                    _cardSubfolders = new string[0];
+                }
+                if (_cardFolderInput == null) _cardFolderInput = CardFolderEntry.Value;
                 _cardPendingIndex = 0;
                 _cardFiles = new List<string>();
             }
@@ -412,27 +486,60 @@ namespace KKS_FreeHStudioSceneLoader
             if (_cardPendingIndex >= _cardPending.Length) _cardPending = null;
         }
 
+        /// <summary>The folder the cards are listed from: typed in, up one level, back to the default, or a subfolder.</summary>
+        private void DrawCardFolder()
+        {
+            var entry = CardFolderEntry;
+            var full = FullFolder(entry.Value);
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(Tr("Folder:", "フォルダ:"), GUILayout.Width(60));
+            _cardFolderInput = GUILayout.TextField(_cardFolderInput ?? entry.Value);
+            if (GUILayout.Button(Tr("Open", "開く"), GUILayout.ExpandWidth(false))) SetCardFolder(FullFolder(_cardFolderInput));
+            if (GUILayout.Button(Tr("↑ Up", "↑ 上へ"), GUILayout.ExpandWidth(false)) && full != null)
+            {
+                var parent = Path.GetDirectoryName(full);
+                if (parent != null) SetCardFolder(parent);
+            }
+            if (GUILayout.Button(Tr("Default", "既定"), GUILayout.ExpandWidth(false))) SetCardFolder(FullFolder((string)entry.DefaultValue));
+            GUILayout.EndHorizontal();
+            GUILayout.BeginHorizontal();
+            var sub = GUILayout.Toggle(CardSubfolders.Value, Tr("Include subfolders", "サブフォルダも表示"), GUILayout.ExpandWidth(false));
+            if (sub != CardSubfolders.Value) { CardSubfolders.Value = sub; _cardFiles = null; }
+            GUILayout.EndHorizontal();
+            if (_cardSubfolders != null && _cardSubfolders.Length > 0)
+            {
+                const int columns = 4;
+                int rows = (_cardSubfolders.Length + columns - 1) / columns;
+                _cardFolderScroll = GUILayout.BeginScrollView(_cardFolderScroll, GUILayout.Height(Mathf.Min(rows, 3) * 24f + 6f));
+                int chosen = GUILayout.SelectionGrid(-1, _cardSubfolders, columns);
+                GUILayout.EndScrollView();
+                if (chosen >= 0 && full != null) SetCardFolder(Path.Combine(full, _cardSubfolders[chosen]));
+            }
+        }
+
         private void DrawCardWindow(int id)
         {
             var chara = _cardTarget;
             if (CloseButton(_cardWindowRect)) { _cardTarget = null; return; }
+            LanguageButton(_cardWindowRect, true);
             if (_cardCoordinates)
-                GUILayout.Label($"{(chara.Female ? "♀ " : "♂ ")}{chara.DisplayName}（{StudioHost.OutfitName(chara, StudioHost.OutfitType(chara))}）" +
-                                "　コーデカードをクリックすると、今の服の種類に読み込みます（シーンごとに保存）。");
+                GUILayout.Label($"{(chara.Female ? "♀ " : "♂ ")}{chara.DisplayName} ({StudioHost.OutfitName(chara, StudioHost.OutfitType(chara))})" +
+                                Tr("   Click a coordinate card to load it into the current outfit (saved per scene).", "　コーデカードをクリックすると、今の服の種類に読み込みます（シーンごとに保存）。"));
             else
-                GUILayout.Label($"{(chara.Female ? "♀ " : "♂ ")}{chara.Name}" + (chara.ReplacedName != null ? $"（今: {chara.ReplacedName}）" : "") +
-                                "　カードをクリックすると差し替えます。ポーズと服の状態はシーンのままです（シーンごとに保存）。");
+                GUILayout.Label($"{(chara.Female ? "♀ " : "♂ ")}{chara.Name}" + (chara.ReplacedName != null ? Tr($" (now: {chara.ReplacedName})", $"（今: {chara.ReplacedName}）") : "") +
+                                Tr("   Click a card to replace the character with it. The pose and clothes state stay as in the scene (saved per scene).", "　カードをクリックすると差し替えます。ポーズと服の状態はシーンのままです（シーンごとに保存）。"));
             GUILayout.BeginHorizontal();
-            GUILayout.Label("絞り込み:", GUILayout.Width(60));
+            GUILayout.Label(Tr("Filter:", "絞り込み:"), GUILayout.Width(60));
             _cardFilter = GUILayout.TextField(_cardFilter);
-            if (GUILayout.Button("再読込", GUILayout.Width(70))) _cardFiles = null;
+            if (GUILayout.Button(Tr("Reload", "再読込"), GUILayout.Width(70))) _cardFiles = null;
             GUILayout.EndHorizontal();
+            DrawCardFolder();
             if (_cardFiles == null || _cardPending != null)
-                GUILayout.Label($"カードを確認中… {_cardPendingIndex}/{_cardPending?.Length ?? 0}");
+                GUILayout.Label(Tr($"Checking cards… {_cardPendingIndex}/{_cardPending?.Length ?? 0}", $"カードを確認中… {_cardPendingIndex}/{_cardPending?.Length ?? 0}"));
             else
                 GUILayout.Label(_cardCoordinates
-                    ? $"UserData/coordinate のコーデカード: {_cardFiles.Count} 枚"
-                    : $"UserData/chara/{(chara.Female ? "female" : "male")} のカード: {_cardFiles.Count} 枚（コイカツサンシャインのカードのみ）");
+                    ? Tr($"Coordinate cards: {_cardFiles.Count}", $"コーデカード: {_cardFiles.Count} 枚")
+                    : Tr($"Cards: {_cardFiles.Count} (Koikatsu Sunshine cards only)", $"カード: {_cardFiles.Count} 枚（コイカツサンシャインのカードのみ）"));
 
             _cardScroll = GUILayout.BeginScrollView(_cardScroll, GUILayout.Height(CardListHeight));
             if (_cardFiles != null)
@@ -457,8 +564,8 @@ namespace KKS_FreeHStudioSceneLoader
                         var cell = new Rect(area.x + col * (cellW + ThumbGap), area.y + row * cellH, cellW, imageH + ThumbLabelHeight);
                         if (GUI.Button(cell, GUIContent.none))
                             _cardStatus = _cardCoordinates
-                                ? StudioHost.SetOutfitCard(chara, f) ?? $"{chara.DisplayName} にコーデ「{StudioHost.OutfitCardName(chara)}」を読み込みました。"
-                                : StudioHost.SetReplacement(chara, f) ?? $"{chara.Name} を「{chara.ReplacedName}」に差し替えました。";
+                                ? StudioHost.SetOutfitCard(chara, f) ?? Tr($"Loaded the coordinate \"{StudioHost.OutfitCardName(chara)}\" on {chara.DisplayName}.", $"{chara.DisplayName} にコーデ「{StudioHost.OutfitCardName(chara)}」を読み込みました。")
+                                : StudioHost.SetReplacement(chara, f) ?? Tr($"Replaced {chara.Name} with \"{chara.ReplacedName}\".", $"{chara.Name} を「{chara.ReplacedName}」に差し替えました。");
                         var imageRect = new Rect(cell.x + 2, cell.y + 2, cell.width - 4, imageH - 4);
                         if (_thumbs.TryGetValue(f, out var tex) && tex != null)
                         {
@@ -473,11 +580,11 @@ namespace KKS_FreeHStudioSceneLoader
             GUILayout.EndScrollView();
             if (!string.IsNullOrEmpty(_cardStatus)) GUILayout.Label(_cardStatus);
             GUILayout.BeginHorizontal();
-            if (!_cardCoordinates && chara.ReplacedName != null && GUILayout.Button("元のキャラに戻す", GUILayout.ExpandWidth(false)))
-                _cardStatus = StudioHost.SetReplacement(chara, null) ?? $"{chara.Name} に戻しました。";
-            if (_cardCoordinates && StudioHost.HasOutfit(chara) && GUILayout.Button("服を戻す", GUILayout.ExpandWidth(false)))
-                _cardStatus = StudioHost.ResetOutfit(chara) ?? $"{chara.Name} の服をシーンのままに戻しました。";
-            if (GUILayout.Button("閉じる", GUILayout.ExpandWidth(false))) _cardTarget = null;
+            if (!_cardCoordinates && chara.ReplacedName != null && GUILayout.Button(Tr("Back to the original character", "元のキャラに戻す"), GUILayout.ExpandWidth(false)))
+                _cardStatus = StudioHost.SetReplacement(chara, null) ?? Tr($"Back to {chara.Name}.", $"{chara.Name} に戻しました。");
+            if (_cardCoordinates && StudioHost.HasOutfit(chara) && GUILayout.Button(Tr("Reset clothes", "服を戻す"), GUILayout.ExpandWidth(false)))
+                _cardStatus = StudioHost.ResetOutfit(chara) ?? Tr($"{chara.Name}'s clothes are back as in the scene.", $"{chara.Name} の服をシーンのままに戻しました。");
+            if (GUILayout.Button(Tr("Close", "閉じる"), GUILayout.ExpandWidth(false))) _cardTarget = null;
             GUILayout.EndHorizontal();
             GUI.DragWindow();
         }
@@ -511,10 +618,16 @@ namespace KKS_FreeHStudioSceneLoader
             }
         }
 
-        /// <summary>Keeps a window's title bar on the screen, so it can't be dragged away.</summary>
+        /// <summary>How much of a window stays on the screen when it is dragged past the left or right edge.</summary>
+        private const float KeepVisibleWidth = 100f;
+
+        /// <summary>
+        /// Keeps a window's title bar on the screen, so it can't be dragged away: it may go past the left and right
+        /// edges and the bottom as long as a part of it is left to drag it back.
+        /// </summary>
         private static Rect KeepOnScreen(Rect r)
         {
-            r.x = Mathf.Clamp(r.x, 0, Mathf.Max(0, Screen.width - r.width));
+            r.x = Mathf.Clamp(r.x, KeepVisibleWidth - r.width, Screen.width - KeepVisibleWidth);
             r.y = Mathf.Clamp(r.y, 0, Mathf.Max(0, Screen.height - 40));
             return r;
         }
@@ -522,9 +635,9 @@ namespace KKS_FreeHStudioSceneLoader
         private void DrawOpenButton()
         {
             var label = Selection.IsSelected
-                ? $"スタジオシーン: {Path.GetFileNameWithoutExtension(Selection.ScenePath)} ({WindowKey.Value})"
-                : $"スタジオシーンを選ぶ ({WindowKey.Value})";
-            if (_showWindow) label = $"スタジオシーンの窓を閉じる ({WindowKey.Value})";
+                ? Tr($"Studio scene: {Path.GetFileNameWithoutExtension(Selection.ScenePath)} ({WindowKey.Value})", $"スタジオシーン: {Path.GetFileNameWithoutExtension(Selection.ScenePath)} ({WindowKey.Value})")
+                : Tr($"Choose a studio scene ({WindowKey.Value})", $"スタジオシーンを選ぶ ({WindowKey.Value})");
+            if (_showWindow) label = Tr($"Close the studio scene window ({WindowKey.Value})", $"スタジオシーンの窓を閉じる ({WindowKey.Value})");
             if (DrawButton(label, ButtonPosition.Value))
                 ToggleWindow();
         }
@@ -547,16 +660,17 @@ namespace KKS_FreeHStudioSceneLoader
 
         private void DrawWindow(int id)
         {
+            LanguageButton(_windowRect, false);
             if (StudioHost.Error != null)
             {
-                GUILayout.Label("初期化に失敗しました。output_log.txt を確認してください。");
+                GUILayout.Label(Tr("Initialization failed. See output_log.txt.", "初期化に失敗しました。output_log.txt を確認してください。"));
                 GUILayout.Label(StudioHost.Error);
                 GUI.DragWindow();
                 return;
             }
             if (!StudioHost.IsReady)
             {
-                GUILayout.Label("スタジオのデータを読み込み中…（初回のみ、時間がかかります）");
+                GUILayout.Label(Tr("Loading the studio data… (first time only, this takes a while)", "スタジオのデータを読み込み中…（初回のみ、時間がかかります）"));
                 GUI.DragWindow();
                 return;
             }
@@ -585,15 +699,15 @@ namespace KKS_FreeHStudioSceneLoader
         private void DrawSceneList()
         {
             GUILayout.BeginHorizontal();
-            GUILayout.Label("絞り込み:", GUILayout.Width(60));
+            GUILayout.Label(Tr("Filter:", "絞り込み:"), GUILayout.Width(60));
             _filter = GUILayout.TextField(_filter);
-            if (GUILayout.Button("再読込", GUILayout.Width(70))) _reloadRequested = true;
+            if (GUILayout.Button(Tr("Reload", "再読込"), GUILayout.Width(70))) _reloadRequested = true;
             GUILayout.EndHorizontal();
 
             if (_pending != null)
-                GUILayout.Label($"シーンファイルを確認中… {_pendingIndex}/{_pending.Length}（シーン以外のPNGは表示しません）");
+                GUILayout.Label(Tr($"Checking scene files… {_pendingIndex}/{_pending.Length} (PNGs that are not scenes are not listed)", $"シーンファイルを確認中… {_pendingIndex}/{_pending.Length}（シーン以外のPNGは表示しません）"));
             else
-                GUILayout.Label($"シーン: {_files.Count} 件　[KK] は無印コイカツ形式（読み込めないものがあります）");
+                GUILayout.Label(Tr($"Scenes: {_files.Count}   [KK] = Koikatsu (KK) format (some can't be loaded)", $"シーン: {_files.Count} 件　[KK] は無印コイカツ形式（読み込めないものがあります）"));
 
             _scroll = GUILayout.BeginScrollView(_scroll, GUILayout.Height(CurrentListHeight));
             if (ShowThumbnails.Value)
@@ -625,14 +739,14 @@ namespace KKS_FreeHStudioSceneLoader
             GUILayout.FlexibleSpace();
             GUILayout.BeginHorizontal();
             GUI.enabled = Selection.IsSelected;
-            if (GUILayout.Button("解除（通常のマップでHをする）", GUILayout.ExpandWidth(false)))
+            if (GUILayout.Button(Tr("Unset (use the normal map for H)", "解除（通常のマップでHをする）"), GUILayout.ExpandWidth(false)))
             {
                 Selection.Unset(_freeH);
-                _status = "解除しました。通常のマップを使います。もう一度シーンをクリックするとセットします。";
+                _status = Tr("Unset. The normal map is used. Click a scene again to set it.", "解除しました。通常のマップを使います。もう一度シーンをクリックするとセットします。");
             }
             GUI.enabled = true;
             GUILayout.Space(12);
-            var thumbs = GUILayout.Toggle(ShowThumbnails.Value, "サムネイルで表示", GUILayout.ExpandWidth(false));
+            var thumbs = GUILayout.Toggle(ShowThumbnails.Value, Tr("Show thumbnails", "サムネイルで表示"), GUILayout.ExpandWidth(false));
             if (thumbs != ShowThumbnails.Value) ShowThumbnails.Value = thumbs;
             GUILayout.EndHorizontal();
         }
@@ -697,7 +811,7 @@ namespace KKS_FreeHStudioSceneLoader
                     var name = (SceneFile.IsKoikatsuFormat(f) ? "[KK] " : "") + Path.GetFileNameWithoutExtension(f);
                     GUI.Label(new Rect(cell.x, cell.y + imageH - 2, cell.width, ThumbLabelHeight), name, _thumbLabelStyle);
                     if (chosen && Selection.ScenePath == f && Event.current.type == EventType.Repaint)
-                        GUI.Label(new Rect(cell.x + 4, cell.y + 2, cell.width, ThumbLabelHeight), "セット中", _thumbLabelStyle);
+                        GUI.Label(new Rect(cell.x + 4, cell.y + 2, cell.width, ThumbLabelHeight), Tr("In use", "セット中"), _thumbLabelStyle);
                 }
             }
         }
@@ -774,25 +888,25 @@ namespace KKS_FreeHStudioSceneLoader
         {
             if (Selection.PreviewPath == null || !StudioHost.HasSceneData)
             {
-                GUILayout.Label("左の一覧でシーンをクリックすると、フリーHにセットして、ここにシーンの詳細と設定（土台のマップ、時間帯、キャラクター、音）を出します。設定はシーンごとに保存します。");
+                GUILayout.Label(Tr("Click a scene in the list on the left to set it for Free H. Its details and settings (base map, time of day, characters, sounds) appear here. Settings are saved per scene.", "左の一覧でシーンをクリックすると、フリーHにセットして、ここにシーンの詳細と設定（土台のマップ、時間帯、キャラクター、音）を出します。設定はシーンごとに保存します。"));
                 return;
             }
-            GUILayout.Label($"シーン: {Path.GetFileNameWithoutExtension(Selection.PreviewPath)}");
-            GUILayout.Label(Selection.ScenePath == Selection.PreviewPath ? "状態: セット済み（このシーンでHを始めます）" : "状態: 未セット（左の一覧でもう一度クリックするとセットします）");
+            GUILayout.Label(Tr($"Scene: {Path.GetFileNameWithoutExtension(Selection.PreviewPath)}", $"シーン: {Path.GetFileNameWithoutExtension(Selection.PreviewPath)}"));
+            GUILayout.Label(Selection.ScenePath == Selection.PreviewPath ? Tr("Status: set (H starts with this scene)", "状態: セット済み（このシーンでHを始めます）") : Tr("Status: not set (click it in the list again to set it)", "状態: 未セット（左の一覧でもう一度クリックするとセットします）"));
             GUILayout.Label(Selection.MapDescription);
             DrawMissingMods();
             if (!Selection.NoMap && Selection.Candidates.Count > 1)
             {
-                GUILayout.Label("土台のマップ: このスタジオマップを使うFree-H用マップが複数あります（H位置が違います。シーンごとに保存します）");
+                GUILayout.Label(Tr("Base map: several Free H maps use this studio map (with different H positions; saved per scene)", "土台のマップ: このスタジオマップを使うFree-H用マップが複数あります（H位置が違います。シーンごとに保存します）"));
                 GUILayout.BeginHorizontal();
                 foreach (var map in Selection.Candidates)
-                    if (GUILayout.Button($"{map.DisplayName}（No {map.No}）", map.No == Selection.MapNo ? GUI.skin.box : GUI.skin.button))
+                    if (GUILayout.Button($"{map.DisplayName} (No {map.No})", map.No == Selection.MapNo ? GUI.skin.box : GUI.skin.button))
                         Selection.ChooseMap(_freeH, map);
                 GUILayout.EndHorizontal();
             }
             if (StudioHost.Settings != null && StudioHost.SceneSunLightType >= 0 && StudioHost.SceneSunLightType < TimeNames.Length)
             {
-                bool match = GUILayout.Toggle(StudioHost.Settings.MatchTime, $"時間帯をスタジオのシーンに合わせる（シーン: {TimeNames[StudioHost.SceneSunLightType]}。マップの明るさが変わります）");
+                bool match = GUILayout.Toggle(StudioHost.Settings.MatchTime, Tr($"Use the studio scene's time of day (scene: {TimeNames[StudioHost.SceneSunLightType]}; changes how bright the map is)", $"時間帯をスタジオのシーンに合わせる（シーン: {TimeNames[StudioHost.SceneSunLightType]}。マップの明るさが変わります）"));
                 if (match != StudioHost.Settings.MatchTime)
                 {
                     StudioHost.SetMatchTime(match);
@@ -802,11 +916,13 @@ namespace KKS_FreeHStudioSceneLoader
             GUILayout.Space(6);
             DrawCharacterChoice();
             GUILayout.Space(6);
-            GUILayout.Label("音（H 中も F7 の窓で切り替えられます）:");
+            GUILayout.Label(Tr("Sounds (also switched in the F7 window during H):", "音（H 中も F7 の窓で切り替えられます）:"));
             DrawSoundChoice();
         }
 
-        internal static readonly string[] TimeNames = { "朝", "昼", "夕方", "夜" };
+        internal static string[] TimeNames => Japanese ? TimeNamesJa : TimeNamesEn;
+        private static readonly string[] TimeNamesEn = { "morning", "day", "evening", "night" };
+        private static readonly string[] TimeNamesJa = { "朝", "昼", "夕方", "夜" };
 
         private Vector2 _missingScroll;
         private string _copyStatus;
@@ -831,13 +947,13 @@ namespace KKS_FreeHStudioSceneLoader
             var mods = StudioHost.MissingMods;
             GUILayout.BeginHorizontal();
             if (mods.Count == 0)
-                GUILayout.Label("MODは揃っています（シーンを読み込んだときに Sideloader が調べたもの）。", _allModsStyle);
+                GUILayout.Label(Tr("All mods are installed (as checked by Sideloader when the scene was loaded).", "MODは揃っています（シーンを読み込んだときに Sideloader が調べたもの）。"), _allModsStyle);
             else
-                GUILayout.Label($"足りないMOD: {mods.Count} 種類（使われている回数の多い順）", _missingStyle);
-            if (GUILayout.Button("クリップボードにコピー", GUILayout.ExpandWidth(false)))
+                GUILayout.Label(Tr($"Missing mods: {mods.Count} (most used first)", $"足りないMOD: {mods.Count} 種類（使われている回数の多い順）"), _missingStyle);
+            if (GUILayout.Button(Tr("Copy to clipboard", "クリップボードにコピー"), GUILayout.ExpandWidth(false)))
             {
                 GUIUtility.systemCopyBuffer = StudioHost.MissingModsText(Selection.PreviewPath);
-                _copyStatus = "コピーしました。";
+                _copyStatus = Tr("Copied.", "コピーしました。");
                 _copyStatusFor = Selection.PreviewPath;
             }
             GUILayout.EndHorizontal();
@@ -846,13 +962,13 @@ namespace KKS_FreeHStudioSceneLoader
             _missingScroll = GUILayout.BeginScrollView(_missingScroll, GUILayout.Height(Mathf.Min(mods.Count, 8) * 22 + 10));
             foreach (var m in mods.OrderByDescending(m => m.Count))
             {
-                var label = $"{(string.IsNullOrEmpty(m.Name) ? m.Guid : m.Name)}（{m.Count}）";
-                if (!string.IsNullOrEmpty(m.Author)) label += $"  作者: {m.Author}";
+                var label = $"{(string.IsNullOrEmpty(m.Name) ? m.Guid : m.Name)} ({m.Count})";
+                if (!string.IsNullOrEmpty(m.Author)) label += Tr($"  by {m.Author}", $"  作者: {m.Author}");
                 if (!string.IsNullOrEmpty(m.Website)) label += $"  {m.Website}";
                 GUILayout.Label(label, _missingStyle);
             }
             GUILayout.EndScrollView();
-            GUILayout.Label("（ ）内はシーンで使われている回数です。シェーダーなど、Hで置いたときに初めて分かるものは含みません。");
+            GUILayout.Label(Tr("The number in ( ) is how often the scene uses the mod. Mods only found when the scene is placed in H (such as shaders) are not included.", "（ ）内はシーンで使われている回数です。シェーダーなど、Hで置いたときに初めて分かるものは含みません。"));
         }
 
         /// <summary>Which of the scene's characters are placed in H.</summary>
@@ -885,16 +1001,16 @@ namespace KKS_FreeHStudioSceneLoader
             var charas = StudioHost.SceneCharacters;
             if (charas.Count == 0)
             {
-                GUILayout.Label("このシーンにはキャラクターがいません。");
+                GUILayout.Label(Tr("This scene has no characters.", "このシーンにはキャラクターがいません。"));
                 return;
             }
-            GUILayout.Label($"シーンのキャラクター（{charas.Count} 人）: チェックしたキャラクターを、スタジオのポーズのまま置きます。「差し替え」で別のキャラカードにできます。");
+            GUILayout.Label(Tr($"Scene characters ({charas.Count}): the checked ones are placed posed as in Studio. \"Replace\" swaps one for another character card.", $"シーンのキャラクター（{charas.Count} 人）: チェックしたキャラクターを、スタジオのポーズのまま置きます。「差し替え」で別のキャラカードにできます。"));
             foreach (var female in new[] { true, false })
             {
                 var list = charas.Where(c => c.Female == female).ToList();
                 if (list.Count == 0) continue;
                 bool on = female ? StudioHost.FemalesOn : StudioHost.MalesOn;
-                StudioHost.SetSexEnabled(female, GUILayout.Toggle(on, $"{(female ? "女性" : "男性")}を表示（{list.Count} 人）"));
+                StudioHost.SetSexEnabled(female, GUILayout.Toggle(on, Tr($"Show {(female ? "females" : "males")} ({list.Count})", $"{(female ? "女性" : "男性")}を表示（{list.Count} 人）")));
                 GUI.enabled = female ? StudioHost.FemalesOn : StudioHost.MalesOn;
                 foreach (var chara in list)
                 {
@@ -906,7 +1022,7 @@ namespace KKS_FreeHStudioSceneLoader
                     StudioHost.SetCharacterEnabled(chara, GUILayout.Toggle(chara.Enabled, (chara.Female ? "♀ " : "♂ ") + chara.Name + (chara.ReplacedName != null ? $" → {chara.ReplacedName}" : "")));
                     DrawReplaceButtons(chara);
                     bool open = _outfitOpen == chara;
-                    if (GUILayout.Button(open ? "服 ▲" : "服 ▼", GUILayout.ExpandWidth(false))) _outfitOpen = open ? null : chara;
+                    if (GUILayout.Button(open ? Tr("Clothes ▲", "服 ▲") : Tr("Clothes ▼", "服 ▼"), GUILayout.ExpandWidth(false))) _outfitOpen = open ? null : chara;
                     GUILayout.EndHorizontal();
                     if (_outfitOpen == chara)
                     {
@@ -925,19 +1041,27 @@ namespace KKS_FreeHStudioSceneLoader
                 GUI.enabled = true;
             }
             GUILayout.BeginHorizontal();
-            GUILayout.Label("新しいシーンの初期設定:", GUILayout.ExpandWidth(false));
-            var females = GUILayout.Toggle(LoadFemales.Value, "女性を表示", GUILayout.ExpandWidth(false));
+            GUILayout.Label(Tr("Defaults for new scenes:", "新しいシーンの初期設定:"), GUILayout.ExpandWidth(false));
+            var females = GUILayout.Toggle(LoadFemales.Value, Tr("Show females", "女性を表示"), GUILayout.ExpandWidth(false));
             if (females != LoadFemales.Value) LoadFemales.Value = females;
-            var males = GUILayout.Toggle(LoadMales.Value, "男性を表示", GUILayout.ExpandWidth(false));
+            var males = GUILayout.Toggle(LoadMales.Value, Tr("Show males", "男性を表示"), GUILayout.ExpandWidth(false));
             if (males != LoadMales.Value) LoadMales.Value = males;
             GUILayout.EndHorizontal();
-            GUILayout.Label("（設定を一度も変えていないシーンに使います）");
+            GUILayout.Label(Tr("(for scenes whose settings were never changed)", "（設定を一度も変えていないシーンに使います）"));
         }
 
         /// <summary>A × at the top right of a window; true when it was pressed.</summary>
         private static bool CloseButton(Rect window)
         {
             return GUI.Button(new Rect(window.width - 26, 3, 22, 18), "×");
+        }
+
+        /// <summary>Switches the language; shows the name of the other one.</summary>
+        private static void LanguageButton(Rect window, bool besideClose)
+        {
+            float right = besideClose ? window.width - 30 : window.width - 4;
+            if (GUI.Button(new Rect(right - 64, 3, 64, 18), Japanese ? "English" : "日本語"))
+                Language.Value = Japanese ? UiLanguage.English : UiLanguage.Japanese;
         }
 
         /// <summary>The clothes of one scene character: the kind of clothes and a coordinate card (saved per scene).</summary>
@@ -948,24 +1072,24 @@ namespace KKS_FreeHStudioSceneLoader
             var names = new string[count];
             for (int i = 0; i < count; i++) names[i] = StudioHost.OutfitName(chara, i);
             GUILayout.BeginHorizontal();
-            GUILayout.Label("服の種類", GUILayout.Width(56));
+            GUILayout.Label(Tr("Outfit", "服の種類"), GUILayout.Width(56));
             // Four per row: the game's four, then the ones MoreOutfits added
             int newType = GUILayout.SelectionGrid(Mathf.Clamp(type, 0, count - 1), names, 4);
             if (newType != type) StudioHost.SetOutfitType(chara, newType);
             GUILayout.EndHorizontal();
             GUILayout.BeginHorizontal();
-            GUILayout.Label("服の状態", GUILayout.Width(56));
+            GUILayout.Label(Tr("Clothes", "服の状態"), GUILayout.Width(56));
             int state = StudioHost.ClothesState(chara);
             int newState = GUILayout.Toolbar(state + 1, StudioHost.ClothesStateNames) - 1;
             if (newState != state) StudioHost.SetClothesState(chara, newState);
             GUILayout.EndHorizontal();
             GUILayout.BeginHorizontal();
             var card = StudioHost.OutfitCardName(chara);
-            GUILayout.Label(card != null ? $"コーデ: {card}" : "コーデ: キャラのまま", GUILayout.ExpandWidth(true));
-            if (GUILayout.Button("コーデを読み込む", GUILayout.ExpandWidth(false))) OpenCardWindow(chara, true);
+            GUILayout.Label(card != null ? Tr($"Coordinate: {card}", $"コーデ: {card}") : Tr("Coordinate: the character's own", "コーデ: キャラのまま"), GUILayout.ExpandWidth(true));
+            if (GUILayout.Button(Tr("Load coordinate", "コーデを読み込む"), GUILayout.ExpandWidth(false))) OpenCardWindow(chara, true);
             GUI.enabled = GUI.enabled && StudioHost.HasOutfit(chara);
-            if (GUILayout.Button("服を戻す", GUILayout.ExpandWidth(false)))
-                _cardStatus = StudioHost.ResetOutfit(chara) ?? $"{chara.Name} の服をシーンのままに戻しました。";
+            if (GUILayout.Button(Tr("Reset clothes", "服を戻す"), GUILayout.ExpandWidth(false)))
+                _cardStatus = StudioHost.ResetOutfit(chara) ?? Tr($"{chara.Name}'s clothes are back as in the scene.", $"{chara.Name} の服をシーンのままに戻しました。");
             GUI.enabled = true;
             GUILayout.EndHorizontal();
         }
@@ -973,9 +1097,9 @@ namespace KKS_FreeHStudioSceneLoader
         /// <summary>「差し替え」 (opens the card list) and 「戻す」 for one scene character.</summary>
         private void DrawReplaceButtons(StudioHost.SceneCharacter chara)
         {
-            if (GUILayout.Button("差し替え", GUILayout.ExpandWidth(false))) OpenCardWindow(chara, false);
-            if (chara.ReplacedName != null && GUILayout.Button("戻す", GUILayout.ExpandWidth(false)))
-                _cardStatus = StudioHost.SetReplacement(chara, null) ?? $"{chara.Name} に戻しました。";
+            if (GUILayout.Button(Tr("Replace", "差し替え"), GUILayout.ExpandWidth(false))) OpenCardWindow(chara, false);
+            if (chara.ReplacedName != null && GUILayout.Button(Tr("Original", "戻す"), GUILayout.ExpandWidth(false)))
+                _cardStatus = StudioHost.SetReplacement(chara, null) ?? Tr($"Back to {chara.Name}.", $"{chara.Name} に戻しました。");
         }
 
         /// <summary>The scene's sounds: when it is loaded (selection window) and while it is placed (H window). Saved per scene.</summary>
@@ -983,12 +1107,12 @@ namespace KKS_FreeHStudioSceneLoader
         {
             var settings = StudioHost.Settings;
             if (settings == null) return;
-            StudioHost.SetSoundItems(GUILayout.Toggle(settings.SoundItems, "シーンの音・声アイテムを鳴らす（置かれた効果音・ボイスのアイテム）"));
+            StudioHost.SetSoundItems(GUILayout.Toggle(settings.SoundItems, Tr("Play the scene's sound and voice items", "シーンの音・声アイテムを鳴らす（置かれた効果音・ボイスのアイテム）")));
             int voices = StudioHost.CharactersWithVoices;
             if (voices > 0 || settings.CharaVoices)
-                StudioHost.SetCharaVoices(GUILayout.Toggle(settings.CharaVoices, $"キャラのボイスを再生（スタジオのボイスリスト、{voices} 人）"));
+                StudioHost.SetCharaVoices(GUILayout.Toggle(settings.CharaVoices, Tr($"Play the characters' voice lists ({voices})", $"キャラのボイスを再生（スタジオのボイスリスト、{voices} 人）")));
             else
-                GUILayout.Label("キャラのボイス: このシーンのキャラにはボイスリストがありません");
+                GUILayout.Label(Tr("Character voices: no character in this scene has a voice list", "キャラのボイス: このシーンのキャラにはボイスリストがありません"));
         }
 
         /// <summary>
@@ -1050,7 +1174,9 @@ namespace KKS_FreeHStudioSceneLoader
         private StudioHost.SceneCharacter _selectedChara;
         private bool _moveAll;
         private int _moveMode = 1;
-        private static readonly string[] MoveModeNames = { "キャラだけ", "キャラと連結先", "シーン全体" };
+        private static string[] MoveModeNames => Japanese ? MoveModeNamesJa : MoveModeNamesEn;
+        private static readonly string[] MoveModeNamesEn = { "Character", "With linked", "Whole scene" };
+        private static readonly string[] MoveModeNamesJa = { "キャラだけ", "キャラと連結先", "シーン全体" };
         private int _moveStep = 1;
         private int _turnStep = 1;
         private static readonly float[] MoveSteps = { 0.01f, 0.1f, 1f };
@@ -1064,19 +1190,20 @@ namespace KKS_FreeHStudioSceneLoader
             if (_selectedChara == null || !placed.Contains(_selectedChara)) _selectedChara = placed.FirstOrDefault();
 
             if (CloseButton(_charaWindowRect)) _showCharaWindow = false;
+            LanguageButton(_charaWindowRect, true);
             // Taller than the screen: the content scrolls instead of the window running off the screen. The view is as
             // tall as the content (measured on the last repaint), the width as before plus the scrollbar.
             float maxHeight = Mathf.Max(200f, Screen.height - 60f);
             _charaWindowScroll = GUILayout.BeginScrollView(_charaWindowScroll, false, false, GUIStyle.none, GUI.skin.verticalScrollbar,
                 GUILayout.Height(Mathf.Min(_charaContentHeight + 4f, maxHeight)));
             GUILayout.BeginVertical(GUILayout.Width(CharaWindowWidth - WindowStyle.padding.horizontal));
-            GUILayout.Label($"表示のオンオフと、位置の調整ができます（{WindowKey.Value} キーで閉じる）");
+            GUILayout.Label(Tr($"Show/hide and move the scene's characters ({WindowKey.Value} closes)", $"表示のオンオフと、位置の調整ができます（{WindowKey.Value} キーで閉じる）"));
             _charaScroll = GUILayout.BeginScrollView(_charaScroll, GUILayout.Height(Mathf.Min(placed.Count, 6) * 26 + 8));
             foreach (var chara in placed)
             {
                 GUILayout.BeginHorizontal();
                 var visible = StudioHost.IsVisible(chara);
-                var newVisible = GUILayout.Toggle(visible, "表示", GUILayout.Width(56));
+                var newVisible = GUILayout.Toggle(visible, Tr("Show", "表示"), GUILayout.Width(56));
                 if (newVisible != visible) StudioHost.SetVisible(chara, newVisible);
                 var label = (chara.Female ? "♀ " : "♂ ") + chara.DisplayName;
                 if (GUILayout.Button(label, chara == _selectedChara ? GUI.skin.box : GUI.skin.button)) _selectedChara = chara;
@@ -1090,29 +1217,29 @@ namespace KKS_FreeHStudioSceneLoader
                 bool noChara = _selectedChara == null;
                 int moveMode = noChara ? 2 : _moveMode;
                 if (noChara)
-                    GUILayout.Label("このシーンにはキャラクターがいません。シーン全体を動かせます。");
+                    GUILayout.Label(Tr("This scene has no characters. The whole scene can be moved.", "このシーンにはキャラクターがいません。シーン全体を動かせます。"));
                 else
                 {
                     GUILayout.BeginHorizontal();
-                    GUILayout.Label("動かす対象", GUILayout.Width(70));
+                    GUILayout.Label(Tr("Move", "動かす対象"), GUILayout.Width(70));
                     _moveMode = moveMode = GUILayout.Toolbar(_moveMode, MoveModeNames);
                     GUILayout.EndHorizontal();
-                    if (moveMode != 2) _moveAll = GUILayout.Toggle(_moveAll, "全員まとめて動かす（キャラ同士の位置関係を保つ）");
+                    if (moveMode != 2) _moveAll = GUILayout.Toggle(_moveAll, Tr("Move all together (keeps them in place relative to each other)", "全員まとめて動かす（キャラ同士の位置関係を保つ）"));
                 }
                 var targets = noChara ? placed : _moveAll ? placed : new List<StudioHost.SceneCharacter> { _selectedChara };
-                var who = noChara ? "" : _moveAll ? "全員" : _selectedChara.Name;
+                var who = noChara ? "" : _moveAll ? Tr("everyone", "全員") : _selectedChara.Name;
                 switch (moveMode)
                 {
                     case 0:
-                        GUILayout.Label($"動かすキャラクター: {who}（回転は選んだキャラクターが中心）");
+                        GUILayout.Label(Tr($"Moves: {who} (turns around the chosen character)", $"動かすキャラクター: {who}（回転は選んだキャラクターが中心）"));
                         break;
                     case 1:
-                        GUILayout.Label($"動かすもの: {who}と、連結（NodesConstraints）でつながったフォルダ・アイテム {StudioHost.GetLinkedObjects(targets).Count} 個");
+                        GUILayout.Label(Tr($"Moves: {who} and {StudioHost.GetLinkedObjects(targets).Count} folders/items linked by NodesConstraints", $"動かすもの: {who}と、連結（NodesConstraints）でつながったフォルダ・アイテム {StudioHost.GetLinkedObjects(targets).Count} 個"));
                         break;
                     default:
                         GUILayout.Label(noChara
-                            ? "動かすもの: スタジオから置いたもの全部（フォルダ・アイテム。回転はシーンの原点が中心）"
-                            : "動かすもの: スタジオから置いたもの全部（キャラ・フォルダ・アイテム。回転は選んだキャラクターが中心）");
+                            ? Tr("Moves: everything placed from Studio (folders and items; turns around the scene's origin)", "動かすもの: スタジオから置いたもの全部（フォルダ・アイテム。回転はシーンの原点が中心）")
+                            : Tr("Moves: everything placed from Studio (characters, folders and items; turns around the chosen character)", "動かすもの: スタジオから置いたもの全部（キャラ・フォルダ・アイテム。回転は選んだキャラクターが中心）"));
                         break;
                 }
                 void move(Vector3 delta)
@@ -1123,7 +1250,7 @@ namespace KKS_FreeHStudioSceneLoader
                 }
 
                 GUILayout.BeginHorizontal();
-                GUILayout.Label("移動量", GUILayout.Width(50));
+                GUILayout.Label(Tr("Step", "移動量"), GUILayout.Width(50));
                 _moveStep = GUILayout.Toolbar(_moveStep, MoveStepNames);
                 GUILayout.EndHorizontal();
                 // Left/right and forward/back follow the camera, so the buttons move the character as seen on screen
@@ -1133,16 +1260,16 @@ namespace KKS_FreeHStudioSceneLoader
                 if (forward == Vector3.zero) forward = Vector3.Cross(right, Vector3.up);
                 var step = MoveSteps[_moveStep];
                 GUILayout.BeginHorizontal();
-                if (GUILayout.Button("← 左")) move(-right * step);
-                if (GUILayout.Button("右 →")) move(right * step);
-                if (GUILayout.Button("奥へ")) move(forward * step);
-                if (GUILayout.Button("手前へ")) move(-forward * step);
-                if (GUILayout.Button("上へ")) move(Vector3.up * step);
-                if (GUILayout.Button("下へ")) move(Vector3.down * step);
+                if (GUILayout.Button(Tr("← Left", "← 左"))) move(-right * step);
+                if (GUILayout.Button(Tr("Right →", "右 →"))) move(right * step);
+                if (GUILayout.Button(Tr("Away", "奥へ"))) move(forward * step);
+                if (GUILayout.Button(Tr("Closer", "手前へ"))) move(-forward * step);
+                if (GUILayout.Button(Tr("Up", "上へ"))) move(Vector3.up * step);
+                if (GUILayout.Button(Tr("Down", "下へ"))) move(Vector3.down * step);
                 GUILayout.EndHorizontal();
 
                 GUILayout.BeginHorizontal();
-                GUILayout.Label("回転量", GUILayout.Width(50));
+                GUILayout.Label(Tr("Turn", "回転量"), GUILayout.Width(50));
                 _turnStep = GUILayout.Toolbar(_turnStep, TurnStepNames);
                 GUILayout.EndHorizontal();
                 var pivot = noChara ? StudioHost.SceneOrigin : StudioHost.GetPosition(_selectedChara);
@@ -1153,33 +1280,33 @@ namespace KKS_FreeHStudioSceneLoader
                     else StudioHost.RotateScene(pivot, degrees);
                 }
                 GUILayout.BeginHorizontal();
-                if (GUILayout.Button("左に回す")) turn(-TurnSteps[_turnStep]);
-                if (GUILayout.Button("右に回す")) turn(TurnSteps[_turnStep]);
+                if (GUILayout.Button(Tr("Turn left", "左に回す"))) turn(-TurnSteps[_turnStep]);
+                if (GUILayout.Button(Tr("Turn right", "右に回す"))) turn(TurnSteps[_turnStep]);
                 GUILayout.EndHorizontal();
 
                 GUILayout.BeginHorizontal();
-                if (GUILayout.Button("カメラの注視点へ移動"))
+                if (GUILayout.Button(Tr("Move to camera target", "カメラの注視点へ移動")))
                 {
                     var focus = GetCameraFocus();
                     if (focus.HasValue) move(focus.Value - pivot);
                 }
-                if (GUILayout.Button("元の位置に戻す"))
+                if (GUILayout.Button(Tr("Back to original position", "元の位置に戻す")))
                 {
                     if (moveMode == 0) StudioHost.ResetPose(targets);
                     else if (moveMode == 1) StudioHost.ResetLinked(targets);
                     else StudioHost.ResetScene();
                 }
                 GUILayout.EndHorizontal();
-                GUILayout.Label("「カメラの注視点へ移動」: カメラを動かして、置きたい場所を画面の中心に合わせてから押してください。");
+                GUILayout.Label(Tr("\"Move to camera target\": move the camera so the place you want is in the center of the screen, then press it.", "「カメラの注視点へ移動」: カメラを動かして、置きたい場所を画面の中心に合わせてから押してください。"));
             }
             if (_selectedChara != null)
             {
-                GUILayout.Label($"服（{_selectedChara.DisplayName}。シーンごとに保存します）:");
+                GUILayout.Label(Tr($"Clothes ({_selectedChara.DisplayName}, saved per scene):", $"服（{_selectedChara.DisplayName}。シーンごとに保存します）:"));
                 DrawOutfitControls(_selectedChara);
                 if (!string.IsNullOrEmpty(_cardStatus) && _cardTarget == null) GUILayout.Label(_cardStatus);
             }
             DrawLayoutSlots();
-            GUILayout.Label("音（シーンごとに保存します）:");
+            GUILayout.Label(Tr("Sounds (saved per scene):", "音（シーンごとに保存します）:"));
             DrawSoundChoice();
             GUILayout.EndVertical();
             if (Event.current.type == EventType.Repaint) _charaContentHeight = GUILayoutUtility.GetLastRect().height;
@@ -1199,28 +1326,28 @@ namespace KKS_FreeHStudioSceneLoader
         {
             var settings = StudioHost.Settings;
             if (settings == null) return;
-            GUILayout.Label("配置の保存（移動・回転・表示。シーンごとに保存します）:");
+            GUILayout.Label(Tr("Saved layouts (position, rotation, visibility; saved per scene):", "配置の保存（移動・回転・表示。シーンごとに保存します）:"));
             int last = settings.LastSavedLayout;
             for (int i = 0; i < settings.Layouts.Length; i++)
             {
                 var layout = settings.Layouts[i];
                 GUILayout.BeginHorizontal();
-                var label = $"スロット{i + 1}: " + (layout != null ? layout.Saved.ToString("M/d HH:mm") + (i == last ? "（最後に保存）" : "") : "空");
+                var label = Tr($"Slot {i + 1}: ", $"スロット{i + 1}: ") + (layout != null ? layout.Saved.ToString("M/d HH:mm") + (i == last ? Tr(" (last saved)", "（最後に保存）") : "") : Tr("empty", "空"));
                 GUILayout.Label(label, GUILayout.Width(200));
-                if (GUILayout.Button("保存"))
-                    _layoutStatus = StudioHost.SaveLayout(i) ? $"スロット{i + 1}に保存しました。" : "保存できませんでした。";
+                if (GUILayout.Button(Tr("Save", "保存")))
+                    _layoutStatus = StudioHost.SaveLayout(i) ? Tr($"Saved to slot {i + 1}.", $"スロット{i + 1}に保存しました。") : Tr("Could not save.", "保存できませんでした。");
                 GUI.enabled = layout != null;
-                if (GUILayout.Button("ロード"))
-                    _layoutStatus = StudioHost.LoadLayout(i) ? $"スロット{i + 1}を読み込みました。" : "読み込めませんでした。";
-                if (GUILayout.Button("消す"))
+                if (GUILayout.Button(Tr("Load", "ロード")))
+                    _layoutStatus = StudioHost.LoadLayout(i) ? Tr($"Loaded slot {i + 1}.", $"スロット{i + 1}を読み込みました。") : Tr("Could not load.", "読み込めませんでした。");
+                if (GUILayout.Button(Tr("Delete", "消す")))
                 {
                     StudioHost.DeleteLayout(i);
-                    _layoutStatus = $"スロット{i + 1}を消しました。";
+                    _layoutStatus = Tr($"Deleted slot {i + 1}.", $"スロット{i + 1}を消しました。");
                 }
                 GUI.enabled = true;
                 GUILayout.EndHorizontal();
             }
-            var auto = GUILayout.Toggle(StudioHost.AutoLayoutOn, "シーンを読み込んだら、最後に保存したスロットを再現する");
+            var auto = GUILayout.Toggle(StudioHost.AutoLayoutOn, Tr("Apply the last saved slot when the scene is loaded", "シーンを読み込んだら、最後に保存したスロットを再現する"));
             if (auto != StudioHost.AutoLayoutOn) StudioHost.SetAutoLayout(auto);
             if (!string.IsNullOrEmpty(_layoutStatus)) GUILayout.Label(_layoutStatus);
         }
@@ -1265,13 +1392,13 @@ namespace KKS_FreeHStudioSceneLoader
             if (path == PreviewPath && StudioHost.HasSceneData) return null;
             bool unset = IsSelected;
             Clear();
-            string prefix = unset ? "セットしていたシーンは解除しました。\n" : "";
+            string prefix = unset ? FreeHStudioSceneLoader.Tr("The scene that was set has been unset.\n", "セットしていたシーンは解除しました。\n") : "";
             if (!SceneFile.IsScene(path))
-                return prefix + "このファイルはスタジオのシーンではありません（シーンのデータが入っていない画像です）。";
+                return prefix + FreeHStudioSceneLoader.Tr("This file is not a studio scene (the image has no scene data).", "このファイルはスタジオのシーンではありません（シーンのデータが入っていない画像です）。");
             if (!StudioHost.LoadSceneData(path, out var studioMapNo))
                 return prefix + (SceneFile.IsKoikatsuFormat(path)
-                    ? "このシーンを読み込めませんでした。無印コイカツ（KK）形式のシーンで、キャラクターのデータを読めなかった可能性があります。"
-                    : "このシーンを読み込めませんでした。output_log.txt を確認してください。");
+                    ? FreeHStudioSceneLoader.Tr("Could not load this scene. It is a Koikatsu (KK) scene, and its character data may not be readable.", "このシーンを読み込めませんでした。無印コイカツ（KK）形式のシーンで、キャラクターのデータを読めなかった可能性があります。")
+                    : FreeHStudioSceneLoader.Tr("Could not load this scene. See output_log.txt.", "このシーンを読み込めませんでした。output_log.txt を確認してください。"));
             PreviewPath = path;
             if (studioMapNo < 0)
             {
@@ -1290,21 +1417,21 @@ namespace KKS_FreeHStudioSceneLoader
             get
             {
                 if (PreviewPath == null) return "";
-                if (NoMap) return "土台のマップ: なし（アイテムだけのシーン。フリーHで選んでいるマップのH位置を使います）";
-                if (_error != null) return "土台のマップ: " + _error;
+                if (NoMap) return FreeHStudioSceneLoader.Tr("Base map: none (a scene of items only; the H positions of the map chosen in Free H are used)", "土台のマップ: なし（アイテムだけのシーン。フリーHで選んでいるマップのH位置を使います）");
+                if (_error != null) return FreeHStudioSceneLoader.Tr("Base map: ", "土台のマップ: ") + _error;
                 var map = Candidates.FirstOrDefault(c => c.No == MapNo);
-                return map == null ? "" : $"土台のマップ: {map.DisplayName}（No {map.No}）" +
-                    (_approximate ? "\n注意: スタジオ専用マップを通常版のマップに対応させました。アイテムの位置が少しずれる可能性があります。" : "");
+                return map == null ? "" : FreeHStudioSceneLoader.Tr($"Base map: {map.DisplayName} (No {map.No})", $"土台のマップ: {map.DisplayName}（No {map.No}）") +
+                    (_approximate ? FreeHStudioSceneLoader.Tr("\nNote: the studio-only map was matched to the main game's version. Items may be slightly off.", "\n注意: スタジオ専用マップを通常版のマップに対応させました。アイテムの位置が少しずれる可能性があります。") : "");
             }
         }
 
         /// <summary>Sets the scene shown in the window for H: switches the Free H map to its base map.</summary>
         internal static string Use(FreeHScene freeH)
         {
-            if (PreviewPath == null || !StudioHost.HasSceneData) return "先に一覧でシーンを選んでください。";
+            if (PreviewPath == null || !StudioHost.HasSceneData) return FreeHStudioSceneLoader.Tr("Choose a scene in the list first.", "先に一覧でシーンを選んでください。");
             if (NoMap) return UseWithoutMap(freeH);
             var param = Candidates.FirstOrDefault(c => c.No == MapNo);
-            if (param == null) return _error ?? "このシーンに使えるフリーHのマップがありません。";
+            if (param == null) return _error ?? FreeHStudioSceneLoader.Tr("No Free H map can be used for this scene.", "このシーンに使えるフリーHのマップがありません。");
 
             RememberMap(freeH);
             ScenePath = PreviewPath;
@@ -1314,7 +1441,7 @@ namespace KKS_FreeHStudioSceneLoader
             if (StudioHost.Settings != null && StudioHost.Settings.MatchTime) ApplySceneTime(freeH);
             FreeHStudioSceneLoader.Logger.LogInfo($"Selected studio scene {ScenePath} on Free H map {param.No} ({param.MapName}){(_approximate ? " [approximate match]" : "")}" +
                 (Candidates.Count > 1 ? $", other Free H maps with the same studio map: {string.Join(", ", Candidates.Where(c => c != param).Select(c => $"{c.No} ({c.MapName})").ToArray())}" : ""));
-            return $"セットしました。土台のマップ: {param.DisplayName}（No {param.No}）。";
+            return FreeHStudioSceneLoader.Tr($"Set. Base map: {param.DisplayName} (No {param.No}).", $"セットしました。土台のマップ: {param.DisplayName}（No {param.No}）。");
         }
 
         /// <summary>
@@ -1325,7 +1452,7 @@ namespace KKS_FreeHStudioSceneLoader
         {
             var param = freeH.member.resultMapInfo.Value;
             if (param == null || !param.isFreeH)
-                return "このシーンには土台のマップがありません。先に通常のマップ選択で、H位置に使うマップを選んでから、もう一度シーンをクリックしてください。";
+                return FreeHStudioSceneLoader.Tr("This scene has no base map. Choose the map for the H positions in the normal map selection first, then click the scene again.", "このシーンには土台のマップがありません。先に通常のマップ選択で、H位置に使うマップを選んでから、もう一度シーンをクリックしてください。");
             RememberMap(freeH);
             ScenePath = PreviewPath;
             MapNo = param.No;
@@ -1333,9 +1460,9 @@ namespace KKS_FreeHStudioSceneLoader
             Hooks.ApplySceneThumbnail(freeH);
             if (StudioHost.Settings != null && StudioHost.Settings.MatchTime) ApplySceneTime(freeH);
             FreeHStudioSceneLoader.Logger.LogInfo($"Selected studio scene {ScenePath} (no studio map), H positions from Free H map {param.No} ({param.MapName})");
-            return $"セットしました。このシーンには土台のマップがないため、「{param.DisplayName}」のH位置を使います" +
-                   (FreeHStudioSceneLoader.HideBaseMap.Value ? "（マップ自体は表示しません）。" : "。") +
-                   "\nシーンは、シーン内の女の子の位置がHの開始位置に来るように置きます。通常のマップ選択で別のマップを選ぶと、H位置だけ変わります。";
+            return FreeHStudioSceneLoader.Tr($"Set. This scene has no base map, so the H positions of \"{param.DisplayName}\" are used", $"セットしました。このシーンには土台のマップがないため、「{param.DisplayName}」のH位置を使います") +
+                   (FreeHStudioSceneLoader.HideBaseMap.Value ? FreeHStudioSceneLoader.Tr(" (the map itself is hidden).", "（マップ自体は表示しません）。") : FreeHStudioSceneLoader.Tr(".", "。")) +
+                   FreeHStudioSceneLoader.Tr("\nThe scene is placed so that its female character stands at the H start position. Choosing another map in the normal map selection changes only the H positions.", "\nシーンは、シーン内の女の子の位置がHの開始位置に来るように置きます。通常のマップ選択で別のマップを選ぶと、H位置だけ変わります。");
         }
 
         /// <summary>Stops using the scene for H (its details stay shown) and shows the normal map again.</summary>

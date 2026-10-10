@@ -17,6 +17,8 @@ namespace KKS_FreeHStudioSceneLoader
     /// </summary>
     internal static class StudioHost
     {
+        private static string Tr(string en, string ja) => FreeHStudioSceneLoader.Tr(en, ja);
+
         private static GameObject _host;
         private static GameObject _overlayRoot;
         private static SceneInfo _sceneInfo;
@@ -85,7 +87,7 @@ namespace KKS_FreeHStudioSceneLoader
                         _sceneCharacters.Add(new SceneCharacter
                         {
                             Info = chara,
-                            Name = string.IsNullOrEmpty(chara.charFile?.parameter?.fullname) ? "(名前なし)" : chara.charFile.parameter.fullname,
+                            Name = string.IsNullOrEmpty(chara.charFile?.parameter?.fullname) ? Tr("(no name)", "(名前なし)") : chara.charFile.parameter.fullname,
                             Female = chara.sex == 1,
                         });
                         foreach (var list in chara.child.Values) CollectCharacters(list);
@@ -471,12 +473,12 @@ namespace KKS_FreeHStudioSceneLoader
             var none = new List<MapInfo.Param>();
             if (studioMapNo < 0)
             {
-                reason = "このシーンにはスタジオのマップがありません。";
+                reason = Tr("This scene has no studio map.", "このシーンにはスタジオのマップがありません。");
                 return none;
             }
             if (!Singleton<Info>.Instance.dicMapLoadInfo.TryGetValue(studioMapNo, out var mapLoadInfo))
             {
-                reason = $"スタジオのマップ（No {studioMapNo}）がインストールされていません。";
+                reason = Tr($"The studio map (No {studioMapNo}) is not installed.", $"スタジオのマップ（No {studioMapNo}）がインストールされていません。");
                 return none;
             }
             var matches = baseMap.infoDic.Values.Where(p =>
@@ -493,13 +495,13 @@ namespace KKS_FreeHStudioSceneLoader
             }
             if (matches.Count == 0)
             {
-                reason = $"シーンのマップ「{mapLoadInfo.name}」（{mapLoadInfo.bundlePath}）に対応するFree-H用マップがありません。";
+                reason = Tr($"No Free H map matches the scene's map \"{mapLoadInfo.name}\" ({mapLoadInfo.bundlePath}).", $"シーンのマップ「{mapLoadInfo.name}」（{mapLoadInfo.bundlePath}）に対応するFree-H用マップがありません。");
                 return none;
             }
             var freeH = matches.Where(p => p.isFreeH).ToList();
             if (freeH.Count == 0)
             {
-                reason = $"シーンのマップ「{matches[0].DisplayName}」はFree-Hでは使えません。";
+                reason = Tr($"The scene's map \"{matches[0].DisplayName}\" can't be used in Free H.", $"シーンのマップ「{matches[0].DisplayName}」はFree-Hでは使えません。");
                 return none;
             }
             int chosen = Settings != null ? Settings.FreeHMap : -1;
@@ -692,7 +694,7 @@ namespace KKS_FreeHStudioSceneLoader
             FreeHStudioSceneLoader.Logger.LogInfo($"Studio scene characters placed: {loaded}");
             if (Settings != null && Settings.CharaVoices) PlayVoices();
             if (loaded > 0)
-                FreeHStudioSceneLoader.Logger.LogMessage($"スタジオシーンのキャラクター: {FreeHStudioSceneLoader.WindowKey.Value} キーで表示の切り替えと位置の調整ができます");
+                FreeHStudioSceneLoader.Logger.LogMessage(Tr($"Studio scene characters: show/hide and move them with the {FreeHStudioSceneLoader.WindowKey.Value} key", $"スタジオシーンのキャラクター: {FreeHStudioSceneLoader.WindowKey.Value} キーで表示の切り替えと位置の調整ができます"));
         }
 
         #region Missing mods of the scene
@@ -891,13 +893,13 @@ namespace KKS_FreeHStudioSceneLoader
         /// </summary>
         internal static string SetReplacement(SceneCharacter chara, string path)
         {
-            if (Settings == null) return "シーンが読み込まれていません。";
+            if (Settings == null) return Tr("No scene is loaded.", "シーンが読み込まれていません。");
             string name = null;
             if (path != null)
             {
                 var file = new ChaFileControl();
                 if (!file.LoadCharaFile(path, (byte)(chara.Female ? 1 : 0), true, true))
-                    return $"このカードは読み込めません（コイカツサンシャインの{(chara.Female ? "女性" : "男性")}キャラカードではありません）。";
+                    return Tr($"This card can't be used (not a Koikatsu Sunshine {(chara.Female ? "female" : "male")} character card).", $"このカードは読み込めません（コイカツサンシャインの{(chara.Female ? "女性" : "男性")}キャラカードではありません）。");
                 name = file.parameter.fullname;
                 Settings.Replacements[chara.Info.dicKey] = new CardReplacement { Card = CardKey(path), Name = name };
             }
@@ -914,7 +916,7 @@ namespace KKS_FreeHStudioSceneLoader
             catch (Exception ex)
             {
                 FreeHStudioSceneLoader.Logger.LogWarning($"Could not change the card of {chara.Name}: {ex}");
-                return "キャラクターを差し替えられませんでした（output_log.txt を確認してください）。";
+                return Tr("Could not replace the character (see output_log.txt).", "キャラクターを差し替えられませんでした（output_log.txt を確認してください）。");
             }
             return null;
         }
@@ -945,10 +947,74 @@ namespace KKS_FreeHStudioSceneLoader
 
         #endregion
 
+        #region H points at the scene's characters
+
+        /// <summary>
+        /// 場所移動 (HPointMove): adds an H point where each placed scene character stands, once for every kind
+        /// (category) of point the map offers, so that choosing a kind and then the character's place gives that kind's
+        /// positions there. The points are made from the prefab the game uses for the point H started at
+        /// (h/common/01.unity3d HPointBase) and are put in the HPointMove scene, which is unloaded with them.
+        /// </summary>
+        internal static void AddCharacterPoints(HPointMove move, Dictionary<int, List<GameObject>> points)
+        {
+            if (!HasPlacedScene || !FreeHStudioSceneLoader.ScenePoints.Value || points == null) return;
+            var categories = points.Where(p => p.Value.Count > 0).Select(p => p.Key).OrderBy(c => c).ToList();
+            // One point for characters standing together (a couple posed in the same place)
+            var places = new List<Transform>();
+            foreach (var chara in _sceneCharacters)
+            {
+                if (!chara.Placed) continue;
+                var t = chara.Oci.charInfo.transform;
+                if (!places.Any(p => (p.position - t.position).sqrMagnitude < 0.2f * 0.2f)) places.Add(t);
+            }
+            if (categories.Count == 0 || places.Count == 0) return;
+
+            var setCategoryObjects = HarmonyLib.AccessTools.Method(typeof(HPointMove), "SetCategoryObjects");
+            var scene = UnityEngine.SceneManagement.SceneManager.GetSceneByName("HPointMove");
+            int added = 0;
+            try
+            {
+                foreach (var place in places)
+                {
+                    foreach (var category in categories)
+                    {
+                        var obj = CommonLib.LoadAsset<GameObject>("h/common/01.unity3d", "HPointBase", true, "", true);
+                        if (obj == null) return;
+                        if (scene.IsValid()) UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(obj, scene);
+                        obj.name = "FreeHStudioScenePoint";
+                        obj.transform.SetPositionAndRotation(place.position, Quaternion.Euler(0f, place.eulerAngles.y, 0f));
+                        var data = obj.GetComponent<H.HPointData>();
+                        if (data == null)
+                        {
+                            UnityEngine.Object.Destroy(obj);
+                            return;
+                        }
+                        data.category = new[] { category };
+                        data.SetKindOffset(Vector3.zero, Vector3.zero);
+                        data.BackUpPosition();
+                        obj.SetActive(false);
+                        // Sorts it in like the map's own points (checks that the kind has positions in this mode)
+                        setCategoryObjects.Invoke(move, new object[] { data, false });
+                        if (points.TryGetValue(category, out var list) && list.Contains(obj)) added++;
+                        else UnityEngine.Object.Destroy(obj);
+                    }
+                }
+            }
+            finally
+            {
+                AssetBundleManager.UnloadAssetBundle("h/common/01.unity3d", true, null, false);
+                FreeHStudioSceneLoader.Logger.LogInfo($"Point move: {added} H points at {places.Count} studio character places ({categories.Count} kinds of point)");
+            }
+        }
+
+        #endregion
+
         #region Outfits (kind of clothes, coordinate cards)
 
         internal static readonly string CoordinateRoot = System.IO.Path.GetFullPath(System.IO.Path.Combine(BepInEx.Paths.GameRootPath, "UserData/coordinate"));
-        internal static readonly string[] OutfitTypeNames = { "普段着", "水着", "パジャマ", "バスタオル" };
+        internal static string[] OutfitTypeNames => FreeHStudioSceneLoader.Japanese ? OutfitTypeNamesJa : OutfitTypeNamesEn;
+        private static readonly string[] OutfitTypeNamesEn = { "Casual", "Swimsuit", "Pajamas", "Bath towel" };
+        private static readonly string[] OutfitTypeNamesJa = { "普段着", "水着", "パジャマ", "バスタオル" };
 
         // MoreOutfits (KK_Plugins, optional) adds outfit slots after the game's four and names them
         private static System.Reflection.MethodInfo _moreOutfitsName;
@@ -1024,7 +1090,7 @@ namespace KKS_FreeHStudioSceneLoader
             {
                 FreeHStudioSceneLoader.Logger.LogDebug($"MoreOutfits name of outfit {index}: {ex.Message}");
             }
-            return $"追加の服 {index - OutfitTypeNames.Length + 1}";
+            return Tr($"Extra outfit {index - OutfitTypeNames.Length + 1}", $"追加の服 {index - OutfitTypeNames.Length + 1}");
         }
 
         private static CharaOutfit OutfitOf(SceneCharacter chara) =>
@@ -1051,7 +1117,9 @@ namespace KKS_FreeHStudioSceneLoader
             return o != null && (o.Type >= 0 || !string.IsNullOrEmpty(o.Card) || o.ClothesState >= 0);
         }
 
-        internal static readonly string[] ClothesStateNames = { "シーンのまま", "全着", "半脱", "全脱" };
+        internal static string[] ClothesStateNames => FreeHStudioSceneLoader.Japanese ? ClothesStateNamesJa : ClothesStateNamesEn;
+        private static readonly string[] ClothesStateNamesEn = { "As in scene", "On", "Half", "Off" };
+        private static readonly string[] ClothesStateNamesJa = { "シーンのまま", "全着", "半脱", "全脱" };
 
         /// <summary>The clothes state chosen for the character: 0 全着, 1 半脱, 2 全脱, -1 as in the scene.</summary>
         internal static int ClothesState(SceneCharacter chara) => OutfitOf(chara)?.ClothesState ?? -1;
@@ -1119,9 +1187,9 @@ namespace KKS_FreeHStudioSceneLoader
         /// <summary>Puts on a coordinate card for the current kind of clothes (Studio's 衣装の読み込み). Returns an error or null.</summary>
         internal static string SetOutfitCard(SceneCharacter chara, string path)
         {
-            if (Settings == null) return "シーンが読み込まれていません。";
+            if (Settings == null) return Tr("No scene is loaded.", "シーンが読み込まれていません。");
             var file = new ChaFileCoordinate();
-            if (!file.LoadFile(path)) return "このコーデカードは読み込めません。";
+            if (!file.LoadFile(path)) return Tr("This coordinate card can't be loaded.", "このコーデカードは読み込めません。");
             var o = EditOutfit(chara);
             o.Type = OutfitType(chara);
             var full = System.IO.Path.GetFullPath(path);
@@ -1138,7 +1206,7 @@ namespace KKS_FreeHStudioSceneLoader
             catch (Exception ex)
             {
                 FreeHStudioSceneLoader.Logger.LogWarning($"Could not put the coordinate {path} on {chara.Name}: {ex}");
-                return "コーデを読み込めませんでした（output_log.txt を確認してください）。";
+                return Tr("Could not load the coordinate (see output_log.txt).", "コーデを読み込めませんでした（output_log.txt を確認してください）。");
             }
             return null;
         }
@@ -1160,7 +1228,7 @@ namespace KKS_FreeHStudioSceneLoader
             catch (Exception ex)
             {
                 FreeHStudioSceneLoader.Logger.LogWarning($"Could not reset the clothes of {chara.Name}: {ex}");
-                return "服を戻せませんでした（output_log.txt を確認してください）。";
+                return Tr("Could not reset the clothes (see output_log.txt).", "服を戻せませんでした（output_log.txt を確認してください）。");
             }
             return null;
         }
@@ -1473,7 +1541,7 @@ namespace KKS_FreeHStudioSceneLoader
             try
             {
                 if (LoadLayout(slot))
-                    FreeHStudioSceneLoader.Logger.LogMessage($"スタジオシーンの配置: スロット{slot + 1}（最後に保存したもの）を再現しました");
+                    FreeHStudioSceneLoader.Logger.LogMessage(Tr($"Studio scene layout: applied slot {slot + 1} (the last saved one)", $"スタジオシーンの配置: スロット{slot + 1}（最後に保存したもの）を再現しました"));
             }
             catch (Exception ex)
             {

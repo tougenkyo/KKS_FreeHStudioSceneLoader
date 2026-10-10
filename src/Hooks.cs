@@ -58,7 +58,7 @@ namespace KKS_FreeHStudioSceneLoader
             try { sprite = PngAssist.LoadSpriteFromFile(Selection.ScenePath); }
             catch { return; }
             var name = "[Studio] " + Path.GetFileNameWithoutExtension(Selection.ScenePath);
-            if (Selection.NoMap) name += $"（H位置: {Selection.BaseMapName}）";
+            if (Selection.NoMap) name += FreeHStudioSceneLoader.Tr($" (H positions: {Selection.BaseMapName})", $"（H位置: {Selection.BaseMapName}）");
             foreach (var img in new[] { freeH.mapImageNormal, freeH.mapImageMasturbation, freeH.mapImageLesbian, freeH.mapImage3P })
                 if (img != null) img.sprite = sprite;
             foreach (var txt in new[] { freeH.mapNameNormal, freeH.mapNameMasturbation, freeH.mapNameLesbian, freeH.mapName3P })
@@ -170,6 +170,21 @@ namespace KKS_FreeHStudioSceneLoader
             if (!FreeHStudioSceneLoader.MouseOnPluginWindow) return true;
             __result = false;
             return false;
+        }
+
+        // 場所移動 (point move): HPointMove.Start sorts the map's H points by kind, then removes the point H started at
+        // where it overlaps one. The studio characters' places are added just before that.
+        [HarmonyPrefix, HarmonyPatch(typeof(HPointMove), "BasePointRemove")]
+        private static void HPointMove_BasePointRemove(HPointMove __instance, Dictionary<int, List<GameObject>> ___dicObj)
+        {
+            try
+            {
+                StudioHost.AddCharacterPoints(__instance, ___dicObj);
+            }
+            catch (System.Exception ex)
+            {
+                FreeHStudioSceneLoader.Logger.LogWarning($"Could not add H points at the studio characters: {ex}");
+            }
         }
 
         [HarmonyPrefix, HarmonyPatch(typeof(HSceneProc), nameof(HSceneProc.OnDestroy))]
