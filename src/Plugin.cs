@@ -21,7 +21,7 @@ namespace KKS_FreeHStudioSceneLoader
     {
         public const string GUID = "local.kks.freehstudiosceneloader";
         public const string PluginName = "Free H Studio Scene Loader (KKS port, experimental)";
-        public const string Version = "0.6.2";
+        public const string Version = "0.6.3";
 
         internal static new ManualLogSource Logger;
         internal static FreeHStudioSceneLoader Instance;
@@ -36,6 +36,8 @@ namespace KKS_FreeHStudioSceneLoader
         internal static ConfigEntry<bool> CardSubfolders;
         internal static ConfigEntry<string> SceneFolder;
         internal static ConfigEntry<bool> SceneSubfolders;
+        internal static ConfigEntry<bool> SetLastScene;
+        internal static ConfigEntry<string> LastScene;
         internal static ConfigEntry<bool> LoadFemales;
         internal static ConfigEntry<bool> LoadMales;
         internal static ConfigEntry<bool> LoadLights;
@@ -86,6 +88,10 @@ namespace KKS_FreeHStudioSceneLoader
                 "Folder the scene list is read from (relative to the game folder, or a full path). Also chosen in the scene selection window.");
             SceneSubfolders = Config.Bind("Scenes", "Include subfolders", true,
                 "List the scenes in the subfolders of the chosen folder too.");
+            SetLastScene = Config.Bind("Scenes", "Set the last scene again", true,
+                "When Free H opens after the game was started, set the scene that was set last time again.");
+            LastScene = Config.Bind("Scenes", "Last scene", "",
+                "The scene set last (kept by the plugin; cleared by Unset).");
             LoadFemales = Config.Bind("General", "Load studio female characters", true,
                 "Default for scenes not set up yet: also load the female characters of the studio scene, posed as in the scene. They are only decoration and do not take part in H. Each scene keeps its own setting once changed in the scene selection window.");
             LoadMales = Config.Bind("General", "Load studio male characters", true,
@@ -279,6 +285,8 @@ namespace KKS_FreeHStudioSceneLoader
             _status = "";
             var path = Selection.ReturnScenePath;
             Selection.ReturnScenePath = null;
+            // First time after the game was started: the scene set last time
+            if (path == null && SetLastScene.Value && !string.IsNullOrEmpty(LastScene.Value)) path = LastScene.Value;
             if (path != null && File.Exists(path))
                 StartCoroutine(SetSceneAgain(freeH, path));
             else
@@ -291,9 +299,13 @@ namespace KKS_FreeHStudioSceneLoader
         /// </summary>
         private System.Collections.IEnumerator SetSceneAgain(FreeHScene freeH, string path)
         {
-            float timeout = Time.realtimeSinceStartup + 60f;
+            float timeout = Time.realtimeSinceStartup + 180f;
             while (freeH != null && Time.realtimeSinceStartup < timeout &&
-                   (freeH.member?.resultMapInfo == null || freeH.member.resultMapInfo.Value == null || !StudioHost.IsReady))
+                   (freeH.member?.resultMapInfo == null || freeH.member.resultMapInfo.Value == null))
+                yield return null;
+            // After the game was started Studio is not made yet (it is made when the window first opens)
+            if (freeH != null) StudioHost.EnsureCreated();
+            while (freeH != null && Time.realtimeSinceStartup < timeout && !StudioHost.IsReady && StudioHost.Error == null)
                 yield return null;
             yield return new WaitForSeconds(0.5f);
             if (freeH == null || freeH != _freeH || Selection.IsSelected || freeH.member?.resultMapInfo?.Value == null)
@@ -797,6 +809,7 @@ namespace KKS_FreeHStudioSceneLoader
             if (GUILayout.Button(Tr("Unset (use the normal map for H)", "解除（通常のマップでHをする）"), GUILayout.ExpandWidth(false)))
             {
                 Selection.Unset(_freeH);
+                LastScene.Value = "";
                 _status = Tr("Unset. The normal map is used. Click a scene again to set it.", "解除しました。通常のマップを使います。もう一度シーンをクリックするとセットします。");
             }
             GUI.enabled = true;
@@ -940,6 +953,7 @@ namespace KKS_FreeHStudioSceneLoader
                 _status = Selection.Use(_freeH);
             // A scene that could not be set leaves nothing set: show the normal map again
             if (!Selection.IsSelected) Selection.ShowNormalMap(_freeH);
+            LastScene.Value = Selection.IsSelected ? Selection.ScenePath : "";
         }
 
         /// <summary>Right column: the settings of the chosen scene (saved per scene).</summary>

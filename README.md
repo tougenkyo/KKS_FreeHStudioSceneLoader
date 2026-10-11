@@ -28,6 +28,8 @@ Copy `KKS_FreeHStudioSceneLoader.dll` into `BepInEx/plugins/` (a subfolder such 
 3. Click a scene. This sets it for H, lists any mods it needs that are missing, and shows its settings. "Unset" goes back to the normal map.
 4. Start H as usual. The scene's items, folders, lights and characters are placed on the map.
 
+The scene set last is set again when Free H opens, also after the game is restarted (until it is unset; see Scenes / Set the last scene again).
+
 The windows are in English by default. The 日本語 / English button at the top right of each window (or General / Language in the config) switches the language.
 
 ### Scene settings (selection window)
@@ -88,6 +90,7 @@ Settings are in `BepInEx/config/local.kks.freehstudiosceneloader.cfg` (or the Co
 | Cards | Include subfolders | on | |
 | Scenes | Scene folder | UserData/studio/scene | Folder of the scene list |
 | Scenes | Include subfolders | on | |
+| Scenes | Set the last scene again | on | Set the last scene when Free H opens after a restart |
 | Diagnostics | Log character poses / Log scene lighting | off | For comparing with Studio |
 
 ## Building
@@ -117,6 +120,8 @@ Output: `bin/Release/KKS_FreeHStudioSceneLoader.dll`.
 2. `UserData/studio/scene` のシーンが一覧になります（サムネイルとファイル名を切り替えられます）。一覧の上で別のフォルダやサブフォルダを指定できます。
 3. シーンをクリックするとHにセットされ、足りないMODの確認と、シーンの設定が表示されます。「解除」で元のマップに戻ります。
 4. いつもどおりHを始めると、シーンのアイテム・フォルダ・ライト・キャラクターがマップに置かれます。
+
+最後にセットしたシーンは、ゲームを起動し直したあとも、フリーHを開くと自動でセットされます（解除するまで）。
 
 表示は英語が既定です。窓の右上の「日本語」ボタン（または設定の General / Language）で日本語に切り替えられます。
 
