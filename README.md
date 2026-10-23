@@ -30,6 +30,14 @@ Copy `KKS_FreeHStudioSceneLoader.dll` into `BepInEx/plugins/` (a subfolder such 
 
 The scene set last is set again when Free H opens, also after the game is restarted (until it is unset; see Scenes / Set the last scene again).
 
+### Filters and the scene data list
+The list can be narrowed down to scenes with or without Timeline animation, with females only / males only / both, and with or without mod errors (missing mods, Sideloader errors while resolving the scene's mods, or files that can't be read).
+To know this the whole scene has to be read, which takes as long as choosing it, so the results are kept in a data list (`BepInEx/config/KKS_FreeHStudioSceneLoader.scenelist.txt`):
+
+- "Make data list" reads the scenes that are not in the list yet or changed since (a few per frame; it goes on while the window is closed and can be stopped). Chosen scenes are added too.
+- "Remake all" reads every scene again, e.g. after installing mods.
+- While a filter is on, scenes not in the data list are left out (their number is shown). Scenes in the list show what they contain on the thumbnail (F = females, M = males, Anim, Missing mods, Mod error).
+
 The windows are in English by default. The 日本語 / English button at the top right of each window (or General / Language in the config) switches the language.
 
 ### Scene settings (selection window)
@@ -91,6 +99,7 @@ Settings are in `BepInEx/config/local.kks.freehstudiosceneloader.cfg` (or the Co
 | Scenes | Scene folder | UserData/studio/scene | Folder of the scene list |
 | Scenes | Include subfolders | on | |
 | Scenes | Set the last scene again | on | Set the last scene when Free H opens after a restart |
+| Scenes | Filter: Timeline animation / characters / missing mods | All | The filters of the scene list (also set in the window) |
 | Diagnostics | Log character poses / Log scene lighting | off | For comparing with Studio |
 
 ## Building
@@ -122,6 +131,14 @@ Output: `bin/Release/KKS_FreeHStudioSceneLoader.dll`.
 4. いつもどおりHを始めると、シーンのアイテム・フォルダ・ライト・キャラクターがマップに置かれます。
 
 最後にセットしたシーンは、ゲームを起動し直したあとも、フリーHを開くと自動でセットされます（解除するまで）。
+
+#### 絞り込みとデータリスト
+一覧を「Timeline アニメのあり・なし」「女性のみ・男性のみ・両方」「MODエラー（足りないMOD、Sideloader がシーンのMODの解決中に出したエラー、読めないファイル）のあり・なし」で絞り込めます。
+これを調べるにはシーンを丸ごと読む必要があり、選んだときと同じだけ時間がかかるので、結果をデータリスト（`BepInEx/config/KKS_FreeHStudioSceneLoader.scenelist.txt`）に保存します。
+
+- 「データリスト作成」：まだリストにないシーンと、変更されたシーンを読みます（1フレームに少しずつ。窓を閉じても続き、中止できます）。選んだシーンもリストに入ります。
+- 「全部作り直す」：すべてのシーンを読み直します（MODを入れたあとなど）。
+- 絞り込み中は、データリストにないシーンは表示しません（件数を表示します）。リストにあるシーンは、サムネイルに中身を表示します（女・男の人数、アニメ、MOD不足の種類数、MODエラー）。
 
 表示は英語が既定です。窓の右上の「日本語」ボタン（または設定の General / Language）で日本語に切り替えられます。
 

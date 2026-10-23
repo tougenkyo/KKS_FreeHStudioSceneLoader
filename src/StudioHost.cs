@@ -230,6 +230,7 @@ namespace KKS_FreeHStudioSceneLoader
             EnsureCreated();
             DiscardSceneData();
             MissingMods.Clear();
+            ResolveFailed = false;
             var sceneInfo = new SceneInfo();
             Singleton<Studio.Studio>.Instance.sceneInfo = sceneInfo;
             IsLoadingScene = true;
@@ -238,11 +239,15 @@ namespace KKS_FreeHStudioSceneLoader
                 // Call the (path, out version) overload directly: ExtendedSave/Sideloader hook this one, while
                 // studio-only plugins (e.g. KKS_AssetImport) hook Load(path) and fail outside Studio.
                 if (!sceneInfo.Load(path, out _))
+                {
+                    RecordSummary(path, new SceneSummary { Failed = true });
                     return false;
+                }
             }
             catch (Exception ex)
             {
                 FreeHStudioSceneLoader.Logger.LogError($"Failed to load scene {path}: {ex}");
+                RecordSummary(path, new SceneSummary { Failed = true });
                 return false;
             }
             finally
@@ -258,8 +263,116 @@ namespace KKS_FreeHStudioSceneLoader
             ReadPluginData();
             _backgroundPng = ReadBackgroundImage(sceneInfo);
             studioMapNo = sceneInfo.map;
+            RecordSummary(path, Summarize(sceneInfo, _timelineXml, MissingMods.Count, ResolveFailed));
             return true;
         }
+
+        #region Scene data list (filters of the scene list)
+
+        /// <summary>Missing mods reported while <see cref="ReadSummary"/> reads a scene (by GUID).</summary>
+        private static HashSet<string> _summaryMods;
+        private static bool _summaryResolveFailed;
+
+        /// <summary>
+        /// Reads a scene file only to find out what it contains, leaving the scene that is loaded for H as it is.
+        /// Takes as long as choosing the scene (the characters' cards are read and Sideloader resolves the mods).
+        /// </summary>
+        internal static SceneSummary ReadSummary(string path)
+        {
+            var studio = Singleton<Studio.Studio>.Instance;
+            var before = studio.sceneInfo;
+            var sceneInfo = new SceneInfo();
+            studio.sceneInfo = sceneInfo;
+            _summaryMods = new HashSet<string>();
+            _summaryResolveFailed = false;
+            IsLoadingScene = true;
+            try
+            {
+                if (!sceneInfo.Load(path, out _)) return new SceneSummary { Failed = true };
+                return Summarize(sceneInfo, ReadSceneString("timeline", "sceneInfo"), _summaryMods.Count, _summaryResolveFailed);
+            }
+            catch (Exception ex)
+            {
+                FreeHStudioSceneLoader.Logger.LogWarning($"Could not read scene {path} for the data list: {ex.GetBaseException().Message}");
+                return new SceneSummary { Failed = true };
+            }
+            finally
+            {
+                IsLoadingScene = false;
+                _summaryMods = null;
+                studio.sceneInfo = before;
+            }
+        }
+
+        private static SceneSummary Summarize(SceneInfo sceneInfo, string timelineXml, int missingMods, bool resolveFailed)
+        {
+            var summary = new SceneSummary
+            {
+                Animation = timelineXml != null && timelineXml.IndexOf("<keyframe", StringComparison.Ordinal) >= 0,
+                MissingMods = missingMods,
+                ResolveError = resolveFailed,
+            };
+            CountCharacters(sceneInfo.dicObject.Values, summary);
+            return summary;
+        }
+
+        private static void CountCharacters(IEnumerable<ObjectInfo> infos, SceneSummary summary)
+        {
+            foreach (var info in infos)
+            {
+                switch (info)
+                {
+                    case OICharInfo chara:
+                        if (chara.sex == 1) summary.Females++;
+                        else summary.Males++;
+                        foreach (var list in chara.child.Values) CountCharacters(list, summary);
+                        break;
+                    case OIFolderInfo folder: CountCharacters(folder.child, summary); break;
+                    case OIItemInfo item: CountCharacters(item.child, summary); break;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Prefix of Sideloader's ShowGUIDError: while a scene is read for the data list only, count the mod and
+        /// skip Sideloader's warning (it would be shown on screen for every item of hundreds of scenes).
+        /// </summary>
+        internal static bool OnMissingModForDataList(string guid)
+        {
+            if (_summaryMods == null) return true;
+            _summaryMods.Add(guid);
+            return false;
+        }
+
+        /// <summary>Sideloader failed while resolving the mod IDs of the scene loaded for H.</summary>
+        internal static bool ResolveFailed { get; private set; }
+
+        /// <summary>
+        /// Finalizer of Sideloader's UniversalAutoResolver.Hooks.ExtendedSceneLoad. Some scenes make it fail (their
+        /// Sideloader data names an object the scene does not have: KeyNotFoundException); ExtendedSave then logs the
+        /// stack trace and the rest of the scene's mod IDs is not resolved. Remembered as a mod error of the scene.
+        /// While reading for the data list only, one line is logged instead of the stack trace.
+        /// </summary>
+        internal static Exception OnSceneResolveFinished(Exception __exception, string path)
+        {
+            if (__exception == null) return null;
+            if (_summaryMods != null)
+            {
+                _summaryResolveFailed = true;
+                FreeHStudioSceneLoader.Logger.LogWarning($"Sideloader could not resolve the mods of scene {path} ({__exception.GetType().Name}); listed as a mod error");
+                return null;
+            }
+            if (IsLoadingScene) ResolveFailed = true;
+            return __exception;
+        }
+
+        private static void RecordSummary(string path, SceneSummary summary)
+        {
+            SceneIndex.Set(path, summary);
+            SceneIndex.Save();
+        }
+
+        #endregion
 
         /// <summary>
         /// The studio background image (a picture drawn behind everything, see Studio.BackgroundCtrl). StudioImageEmbed
@@ -715,7 +828,7 @@ namespace KKS_FreeHStudioSceneLoader
         /// </summary>
         internal static void OnMissingMod(string guid, string author, string website, string name)
         {
-            if (!IsLoadingScene) return;
+            if (!IsLoadingScene || _summaryMods != null) return;
             var mod = MissingMods.FirstOrDefault(m => m.Guid == guid);
             if (mod == null) MissingMods.Add(mod = new MissingMod { Guid = guid, Name = name, Author = author, Website = website });
             mod.Count++;

@@ -21,12 +21,14 @@ namespace KKS_FreeHStudioSceneLoader
     {
         public const string GUID = "local.kks.freehstudiosceneloader";
         public const string PluginName = "Free H Studio Scene Loader (KKS port, experimental)";
-        public const string Version = "0.6.3";
+        public const string Version = "0.6.4";
 
         internal static new ManualLogSource Logger;
         internal static FreeHStudioSceneLoader Instance;
 
         public enum UiLanguage { English, Japanese }
+        public enum HasFilter { All, With, Without }
+        public enum CharacterFilter { All, FemalesOnly, MalesOnly, Both }
 
         internal static ConfigEntry<UiLanguage> Language;
         internal static ConfigEntry<bool> ScenePoints;
@@ -38,6 +40,9 @@ namespace KKS_FreeHStudioSceneLoader
         internal static ConfigEntry<bool> SceneSubfolders;
         internal static ConfigEntry<bool> SetLastScene;
         internal static ConfigEntry<string> LastScene;
+        internal static ConfigEntry<HasFilter> FilterAnimation;
+        internal static ConfigEntry<CharacterFilter> FilterCharacters;
+        internal static ConfigEntry<HasFilter> FilterMissingMods;
         internal static ConfigEntry<bool> LoadFemales;
         internal static ConfigEntry<bool> LoadMales;
         internal static ConfigEntry<bool> LoadLights;
@@ -92,6 +97,12 @@ namespace KKS_FreeHStudioSceneLoader
                 "When Free H opens after the game was started, set the scene that was set last time again.");
             LastScene = Config.Bind("Scenes", "Last scene", "",
                 "The scene set last (kept by the plugin; cleared by Unset).");
+            FilterAnimation = Config.Bind("Scenes", "Filter: Timeline animation", HasFilter.All,
+                "List only the scenes with (or without) Timeline animation. Uses the scene data list (made with the button in the scene selection window).");
+            FilterCharacters = Config.Bind("Scenes", "Filter: characters", CharacterFilter.All,
+                "List only the scenes with female characters only, male characters only, or both. Uses the scene data list.");
+            FilterMissingMods = Config.Bind("Scenes", "Filter: missing mods", HasFilter.All,
+                "List only the scenes with mod errors: mods that are not installed, a Sideloader error, or a file that can't be read (or the ones without). Uses the scene data list.");
             LoadFemales = Config.Bind("General", "Load studio female characters", true,
                 "Default for scenes not set up yet: also load the female characters of the studio scene, posed as in the scene. They are only decoration and do not take part in H. Each scene keeps its own setting once changed in the scene selection window.");
             LoadMales = Config.Bind("General", "Load studio male characters", true,
@@ -192,7 +203,11 @@ namespace KKS_FreeHStudioSceneLoader
                 // Sideloader is another plugin: patch it by name, the scene loader works without this
                 var resolver = AccessTools.TypeByName("Sideloader.AutoResolver.UniversalAutoResolver");
                 var showError = resolver != null ? AccessTools.Method(resolver, "ShowGUIDError") : null;
-                if (showError != null) harmony.Patch(showError, postfix: new HarmonyMethod(typeof(StudioHost), nameof(StudioHost.OnMissingMod)));
+                if (showError != null) harmony.Patch(showError, prefix: new HarmonyMethod(typeof(StudioHost), nameof(StudioHost.OnMissingModForDataList)),
+                    postfix: new HarmonyMethod(typeof(StudioHost), nameof(StudioHost.OnMissingMod)));
+                var uarHooks = resolver != null ? AccessTools.Inner(resolver, "Hooks") : null;
+                var sceneLoad = uarHooks != null ? AccessTools.Method(uarHooks, "ExtendedSceneLoad") : null;
+                if (sceneLoad != null) harmony.Patch(sceneLoad, finalizer: new HarmonyMethod(typeof(StudioHost), nameof(StudioHost.OnSceneResolveFinished)));
                 else Logger.LogWarning("Sideloader's UniversalAutoResolver.ShowGUIDError not found; missing mods of scenes can't be listed");
             }
             catch (Exception ex)
@@ -256,6 +271,7 @@ namespace KKS_FreeHStudioSceneLoader
             }
             if (_reloadRequested) { _files = null; _reloadRequested = false; ClearThumbnails(); }
             if (_showWindow) ScanSceneFiles();
+            BuildDataList();
             if (_showWindow) LoadWantedThumbnails();
             else _cardTarget = null;
             if (WindowKey.Value.IsDown())
@@ -770,21 +786,27 @@ namespace KKS_FreeHStudioSceneLoader
             if (GUILayout.Button(Tr("Reload", "再読込"), GUILayout.Width(70))) _reloadRequested = true;
             GUILayout.EndHorizontal();
             _sceneFolder.Draw();
+            DrawFilters();
+            // Worked out once per layout pass, so the layout and the repaint pass show the same scenes
+            if (_shown == null || Event.current.type == EventType.Layout) UpdateShownScenes();
 
             if (_pending != null)
                 GUILayout.Label(Tr($"Checking scene files… {_pendingIndex}/{_pending.Length} (PNGs that are not scenes are not listed)", $"シーンファイルを確認中… {_pendingIndex}/{_pending.Length}（シーン以外のPNGは表示しません）"));
+            else if (_notInDataList > 0)
+                GUILayout.Label(Tr($"Scenes: {_shown.Count}/{_files.Count}   {_notInDataList} not in the data list are left out (Make data list)", $"シーン: {_shown.Count}/{_files.Count} 件　データリストにない {_notInDataList} 件は表示していません（データリスト作成）"));
             else
-                GUILayout.Label(Tr($"Scenes: {_files.Count}   [KK] = Koikatsu (KK) format (some can't be loaded)", $"シーン: {_files.Count} 件　[KK] は無印コイカツ形式（読み込めないものがあります）"));
+                GUILayout.Label(Tr($"Scenes: {_shown.Count}/{_files.Count}   [KK] = Koikatsu (KK) format (some can't be loaded)", $"シーン: {_shown.Count}/{_files.Count} 件　[KK] は無印コイカツ形式（読み込めないものがあります）"));
 
             _scroll = GUILayout.BeginScrollView(_scroll, GUILayout.Height(CurrentListHeight));
             if (ShowThumbnails.Value)
                 DrawThumbnailGrid();
             else
             {
-                foreach (var f in _files.ToArray())
+                foreach (var f in _shown.ToArray())
                 {
                     var rel = ListName(f);
-                    if (_filter.Length > 0 && rel.IndexOf(_filter, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                    var marks = DataListMarks(f);
+                    if (marks.Length > 0) rel += "   (" + marks + ")";
                     var style = f == _previewPath ? GUI.skin.box : GUI.skin.button;
                     // Clicking a scene reads it and sets it for H (clicking it again after 解除 sets it again)
                     if (GUILayout.Button(rel, style, GUILayout.Width(ListColumnWidth - 30)) && (f != _previewPath || Selection.PreviewPath != f || Selection.ScenePath != f))
@@ -819,7 +841,7 @@ namespace KKS_FreeHStudioSceneLoader
             GUILayout.EndHorizontal();
         }
 
-        private const float ListHeight = 300f;
+        private const float ListHeight = 250f;
         private const float PreviewHeight = 180f;
         private float CurrentListHeight => ShowThumbnails.Value ? ListHeight + PreviewHeight + 4f : ListHeight;
 
@@ -851,7 +873,7 @@ namespace KKS_FreeHStudioSceneLoader
         {
             if (_thumbLabelStyle == null)
                 _thumbLabelStyle = new GUIStyle(GUI.skin.label) { fontSize = 11, alignment = TextAnchor.UpperCenter, wordWrap = false, clipping = TextClipping.Clip };
-            var files = _files.Where(f => _filter.Length == 0 || ListName(f).IndexOf(_filter, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+            var files = _shown;
             float width = ListColumnWidth - 30f;
             float cellW = (width - ThumbGap * (ThumbColumns - 1)) / ThumbColumns;
             float imageH = cellW * 9f / 16f;
@@ -884,6 +906,16 @@ namespace KKS_FreeHStudioSceneLoader
                     GUI.Label(new Rect(cell.x, cell.y + imageH - 2, cell.width, ThumbLabelHeight), name, _thumbLabelStyle);
                     if (chosen && Selection.ScenePath == f && Event.current.type == EventType.Repaint)
                         GUI.Label(new Rect(cell.x + 4, cell.y + 2, cell.width, ThumbLabelHeight), Tr("In use", "セット中"), _thumbLabelStyle);
+                    var marks = DataListMarks(f);
+                    if (marks.Length > 0 && Event.current.type == EventType.Repaint)
+                    {
+                        var marksRect = new Rect(cell.x + 2, cell.y + imageH - ThumbLabelHeight - 2, cell.width - 4, ThumbLabelHeight - 2);
+                        var old = GUI.color;
+                        GUI.color = new Color(0f, 0f, 0f, 0.6f);
+                        GUI.DrawTexture(marksRect, Texture2D.whiteTexture);
+                        GUI.color = old;
+                        GUI.Label(marksRect, marks, _thumbLabelStyle);
+                    }
                 }
             }
         }
@@ -1031,6 +1063,8 @@ namespace KKS_FreeHStudioSceneLoader
             }
             GUILayout.EndHorizontal();
             if (_copyStatus != null) GUILayout.Label(_copyStatus);
+            if (StudioHost.ResolveFailed)
+                GUILayout.Label(Tr("Sideloader failed while resolving the mods of this scene (error in the log). Some mod items may be missing or wrong.", "Sideloader がこのシーンのMODの解決中にエラーになりました（ログに出ています）。MODのアイテムが出ない・違うものになることがあります。"), _missingStyle);
             if (mods.Count == 0) return;
             _missingScroll = GUILayout.BeginScrollView(_missingScroll, GUILayout.Height(Mathf.Min(mods.Count, 8) * 22 + 10));
             foreach (var m in mods.OrderByDescending(m => m.Count))
@@ -1197,6 +1231,8 @@ namespace KKS_FreeHStudioSceneLoader
             if (!StudioHost.IsReady) return;
             if (_files == null)
             {
+                SceneIndex.Forget();
+                _shown = null;
                 _pending = _sceneFolder.Scan();
                 _sceneListRoot = _sceneFolder.Full ?? "";
                 _pendingIndex = 0;
@@ -1211,6 +1247,152 @@ namespace KKS_FreeHStudioSceneLoader
             }
             if (_pendingIndex >= _pending.Length) _pending = null;
         }
+
+        #region Scene data list and filters
+
+        private List<string> _shown;      // the scenes the list shows (worked out once per layout pass)
+        private int _notInDataList;       // scenes left out by the filters because they are not in the data list
+        private List<string> _dataQueue;  // scenes still to be read for the data list
+        private int _dataDone, _dataTotal;
+
+        private static bool FiltersOn =>
+            FilterAnimation.Value != HasFilter.All || FilterCharacters.Value != CharacterFilter.All || FilterMissingMods.Value != HasFilter.All;
+
+        private static bool Matches(HasFilter filter, bool has) =>
+            filter == HasFilter.All || (filter == HasFilter.With) == has;
+
+        private static bool MatchesFilters(SceneSummary s)
+        {
+            if (!Matches(FilterAnimation.Value, s.Animation)) return false;
+            if (!Matches(FilterMissingMods.Value, s.ModError)) return false;
+            switch (FilterCharacters.Value)
+            {
+                case CharacterFilter.FemalesOnly: return s.Females > 0 && s.Males == 0;
+                case CharacterFilter.MalesOnly: return s.Males > 0 && s.Females == 0;
+                case CharacterFilter.Both: return s.Females > 0 && s.Males > 0;
+                default: return true;
+            }
+        }
+
+        /// <summary>The scenes that pass the name filter and the data list filters.</summary>
+        private void UpdateShownScenes()
+        {
+            _shown = new List<string>();
+            _notInDataList = 0;
+            bool filtersOn = FiltersOn;
+            foreach (var f in _files)
+            {
+                if (_filter.Length > 0 && ListName(f).IndexOf(_filter, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                if (filtersOn)
+                {
+                    var summary = SceneIndex.Get(f);
+                    if (summary == null) { _notInDataList++; continue; }
+                    if (!MatchesFilters(summary)) continue;
+                }
+                _shown.Add(f);
+            }
+        }
+
+        private static readonly string[] HasFilterNamesEn = { "All", "With", "Without" };
+        private static readonly string[] HasFilterNamesJa = { "すべて", "あり", "なし" };
+        private static readonly string[] CharacterFilterNamesEn = { "All", "Females only", "Males only", "Both" };
+        private static readonly string[] CharacterFilterNamesJa = { "すべて", "女性のみ", "男性のみ", "両方" };
+        private static string[] HasFilterNames => Japanese ? HasFilterNamesJa : HasFilterNamesEn;
+        private static string[] CharacterFilterNames => Japanese ? CharacterFilterNamesJa : CharacterFilterNamesEn;
+
+        private void DrawFilters()
+        {
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(Tr("Animation:", "アニメ:"), GUILayout.Width(70));
+            var anim = (HasFilter)GUILayout.Toolbar((int)FilterAnimation.Value, HasFilterNames, GUILayout.Width(160));
+            GUILayout.Space(10);
+            GUILayout.Label(Tr("Missing mods:", "MOD不足:"), GUILayout.Width(90));
+            var mods = (HasFilter)GUILayout.Toolbar((int)FilterMissingMods.Value, HasFilterNames, GUILayout.Width(160));
+            GUILayout.EndHorizontal();
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(Tr("Characters:", "キャラ:"), GUILayout.Width(70));
+            var charas = (CharacterFilter)GUILayout.Toolbar((int)FilterCharacters.Value, CharacterFilterNames, GUILayout.Width(330));
+            GUILayout.EndHorizontal();
+            if (anim != FilterAnimation.Value) FilterAnimation.Value = anim;
+            if (mods != FilterMissingMods.Value) FilterMissingMods.Value = mods;
+            if (charas != FilterCharacters.Value) FilterCharacters.Value = charas;
+
+            GUILayout.BeginHorizontal();
+            if (_dataQueue != null)
+            {
+                GUILayout.Label(Tr($"Making the data list… {_dataDone}/{_dataTotal}", $"データリストを作成中… {_dataDone}/{_dataTotal}"));
+                if (GUILayout.Button(Tr("Stop", "中止"), GUILayout.Width(70))) StopDataList();
+            }
+            else
+            {
+                int listed = _pending == null ? _files.Count(f => SceneIndex.Get(f) != null) : 0;
+                GUILayout.Label(_pending != null ? "" : Tr($"Data list: {listed}/{_files.Count} scenes", $"データリスト: {listed}/{_files.Count} 件"));
+                GUI.enabled = _pending == null && listed < _files.Count;
+                if (GUILayout.Button(Tr("Make data list", "データリスト作成"), GUILayout.Width(130))) StartDataList(false);
+                GUI.enabled = _pending == null && _files.Count > 0;
+                if (GUILayout.Button(Tr("Remake all", "全部作り直す"), GUILayout.Width(100))) StartDataList(true);
+                GUI.enabled = true;
+            }
+            GUILayout.EndHorizontal();
+        }
+
+        /// <summary>Queues the scenes of the list that are not in the data list (or all of them, after installing mods).</summary>
+        private void StartDataList(bool all)
+        {
+            _dataQueue = _files.Where(f => all || SceneIndex.Get(f) == null).Reverse().ToList();
+            _dataDone = 0;
+            _dataTotal = _dataQueue.Count;
+            if (_dataTotal == 0) _dataQueue = null;
+        }
+
+        private void StopDataList()
+        {
+            _dataQueue = null;
+            SceneIndex.Save();
+            _shown = null;
+        }
+
+        /// <summary>
+        /// Reads a scene or a few per frame for the data list (on the Free H screen only, with the window open or not).
+        /// A scene takes as long as choosing it, so the list is made once and kept.
+        /// </summary>
+        private void BuildDataList()
+        {
+            if (_dataQueue == null || !StudioHost.IsReady) return;
+            var until = Time.realtimeSinceStartup + 0.03f;
+            do
+            {
+                var path = _dataQueue[_dataQueue.Count - 1];
+                _dataQueue.RemoveAt(_dataQueue.Count - 1);
+                _dataDone++;
+                if (File.Exists(path)) SceneIndex.Set(path, StudioHost.ReadSummary(path));
+                if (_dataDone % 50 == 0) SceneIndex.Save();
+            }
+            while (_dataQueue.Count > 0 && Time.realtimeSinceStartup < until);
+            _shown = null;
+            if (_dataQueue.Count > 0) return;
+            _dataQueue = null;
+            SceneIndex.RemoveDeleted();
+            SceneIndex.Save();
+            _status = Tr($"Data list made ({_dataTotal} scenes read).", $"データリストを作成しました（{_dataTotal} 件を読み込みました）。");
+        }
+
+        /// <summary>What the data list knows about the scene, short (shown on the thumbnails and in the name list).</summary>
+        private static string DataListMarks(string path)
+        {
+            var s = SceneIndex.Get(path);
+            if (s == null) return "";
+            if (s.Failed) return Tr("Can't read", "読めません");
+            var parts = new List<string>();
+            if (s.Females > 0) parts.Add(Tr($"F{s.Females}", $"女{s.Females}"));
+            if (s.Males > 0) parts.Add(Tr($"M{s.Males}", $"男{s.Males}"));
+            if (s.Animation) parts.Add(Tr("Anim", "アニメ"));
+            if (s.MissingMods > 0) parts.Add(Tr($"Missing mods {s.MissingMods}", $"MOD不足{s.MissingMods}"));
+            if (s.ResolveError) parts.Add(Tr("Mod error", "MODエラー"));
+            return string.Join(" ", parts.ToArray());
+        }
+
+        #endregion
 
         private void ClearPreview()
         {
