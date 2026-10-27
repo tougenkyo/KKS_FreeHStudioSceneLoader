@@ -11,6 +11,7 @@ using System.IO;
 using System.Linq;
 using HarmonyLib;
 using Studio;
+using UniRx;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -31,22 +32,32 @@ namespace KKS_FreeHStudioSceneLoader
             catch (System.Exception ex) { FreeHStudioSceneLoader.Logger.LogError($"OnFreeHSceneStart: {ex}"); }
         }
 
+        /// <summary>
+        /// The game's own map selection of the Free H screen (FreeHScene subscribes to its 決定 right after this): a map
+        /// chosen there unsets the scene, like 解除. Subscribed first, so the game then sets the chosen map.
+        /// </summary>
+        [HarmonyPostfix, HarmonyPatch(typeof(MapSelectMenuScene), nameof(MapSelectMenuScene.CreateFreeH))]
+        private static void MapSelectMenuScene_CreateFreeH()
+        {
+            var menu = SingletonInitializer<MapSelectMenuScene>.instance;
+            if (menu == null) return;
+            menu.enterClick.Subscribe(_ =>
+            {
+                try { FreeHStudioSceneLoader.Instance.OnNormalMapChosen(); }
+                catch (System.Exception ex) { FreeHStudioSceneLoader.Logger.LogError($"OnNormalMapChosen: {ex}"); }
+            });
+        }
+
         [HarmonyPostfix, HarmonyPatch(typeof(FreeHScene), nameof(FreeHScene.SetMapSprite))]
         private static void FreeHScene_SetMapSprite(FreeHScene __instance, MapInfo.Param _mapInfo)
         {
             if (!Selection.IsSelected || _mapInfo == null) return;
             if (_mapInfo.No != Selection.MapNo)
             {
-                // Another map was chosen in the normal map selection. A scene without a map keeps the scene
-                // and uses the new map for the H positions; otherwise the scene no longer fits.
-                if (Selection.NoMap && _mapInfo.isFreeH)
-                    Selection.ChangeBaseMap(_mapInfo);
-                else
-                {
-                    Selection.Clear();
-                    Selection.ForgetMapBefore();
-                    return;
-                }
+                // Another map is shown than the scene's (a map chosen in the map selection unsets the scene first)
+                Selection.Clear();
+                Selection.ForgetMapBefore();
+                return;
             }
             ApplySceneThumbnail(__instance);
         }

@@ -74,6 +74,10 @@ namespace KKS_FreeHStudioSceneLoader
         public string Card;
         /// <summary>The name on the card, to show without reading it.</summary>
         public string Name;
+        /// <summary>The sex on the card (1: female), or -1 when not known (saved before 0.6.5: the scene character's).</summary>
+        public int Sex = -1;
+        /// <summary>A character that changes sex: shows the penis (a female one as futanari).</summary>
+        public bool Son;
     }
 
     internal class CharaOutfit
@@ -243,6 +247,11 @@ namespace KKS_FreeHStudioSceneLoader
                         re.SetAttribute("key", r.Key.ToString());
                         re.SetAttribute("card", r.Value.Card);
                         if (!string.IsNullOrEmpty(r.Value.Name)) re.SetAttribute("name", r.Value.Name);
+                        if (r.Value.Sex >= 0)
+                        {
+                            re.SetAttribute("sex", r.Value.Sex.ToString());
+                            re.SetAttribute("son", r.Value.Son ? "true" : "false");
+                        }
                     }
                 }
                 var tmp = FilePath + ".tmp";
@@ -294,7 +303,13 @@ namespace KKS_FreeHStudioSceneLoader
                             };
                     foreach (XmlElement re in e.ChildNodes.OfType<XmlElement>().Where(x => x.Name == "replace"))
                         if (int.TryParse(re.GetAttribute("key"), out var rkey) && re.GetAttribute("card").Length > 0)
-                            settings.Replacements[rkey] = new CardReplacement { Card = re.GetAttribute("card"), Name = re.GetAttribute("name") };
+                            settings.Replacements[rkey] = new CardReplacement
+                            {
+                                Card = re.GetAttribute("card"),
+                                Name = re.GetAttribute("name"),
+                                Sex = int.TryParse(re.GetAttribute("sex"), out var rsex) ? rsex : -1,
+                                Son = ReadBool(re, "son", false),
+                            };
                     _all[path] = settings;
                 }
             }

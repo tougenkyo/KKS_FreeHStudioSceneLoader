@@ -56,6 +56,11 @@ namespace KKS_FreeHStudioSceneLoader
             /// <summary>The name of the card it is replaced with, or null.</summary>
             public string ReplacedName => Settings != null && Settings.Replacements.TryGetValue(Info.dicKey, out var r) ? (string.IsNullOrEmpty(r.Name) ? System.IO.Path.GetFileNameWithoutExtension(r.Card) : r.Name) : null;
             public string DisplayName => ReplacedName ?? Name;
+            /// <summary>Female now: a card of the other sex changes it (a placed character only when it is placed again).</summary>
+            public bool NowFemale => Placed ? Oci.sex == 1
+                : Settings != null && Settings.Replacements.TryGetValue(Info.dicKey, out var r) && r.Sex >= 0 ? r.Sex == 1 : Female;
+            /// <summary>Replaced with a card of the other sex.</summary>
+            public bool SexChanged => Settings != null && Settings.Replacements.TryGetValue(Info.dicKey, out var r) && r.Sex >= 0 && r.Sex == 1 != Female;
         }
 
         private static readonly List<SceneCharacter> _sceneCharacters = new List<SceneCharacter>();
@@ -959,10 +964,21 @@ namespace KKS_FreeHStudioSceneLoader
                 var entry = _sceneCharacters.FirstOrDefault(c => c.Info == info);
                 if (entry != null) entry.OriginalCardFile = SaveOriginalCard(info);
                 // Like Studio's 「変更」 (OCIChar.ChangeChara): the card's looks, the scene's status (clothes, etc.)
-                if (info.charFile.LoadCharaFile(path, 255, true, true))
-                    FreeHStudioSceneLoader.Logger.LogInfo($"Character replaced with card {path}");
-                else
+                if (!info.charFile.LoadCharaFile(path, 255, true, true))
+                {
                     FreeHStudioSceneLoader.Logger.LogWarning($"Could not read the card {path}");
+                    return;
+                }
+                FreeHStudioSceneLoader.Logger.LogInfo($"Character replaced with card {path}");
+                // A card of the other sex: Studio creates the character by OICharInfo.sex (AddObjectFemale/Male), with
+                // the scene's pose; the bones the other sex lacks (breasts, skirt) are added by Studio as for a new one
+                int sex = info.charFile.parameter.sex;
+                if (info.sex != sex)
+                {
+                    info.sex = sex;
+                    info.visibleSon = Settings.Replacements[info.dicKey].Son;
+                    FreeHStudioSceneLoader.Logger.LogInfo($"The character is placed as a {(sex == 1 ? "female" : "male")} (penis {(info.visibleSon ? "shown" : "hidden")})");
+                }
             }
             catch (Exception ex)
             {
@@ -1001,25 +1017,34 @@ namespace KKS_FreeHStudioSceneLoader
         }
 
         /// <summary>
-        /// Replaces a scene character with a card (null: back to the scene's own), saved for the scene. A placed
-        /// character changes at once, like Studio's 「変更」; otherwise when it is next placed. Returns an error or null.
+        /// Replaces a scene character with a card (null: back to the scene's own), saved for the scene. The card can
+        /// be of the other sex. A placed character changes at once, like Studio's 「変更」, unless its sex changes
+        /// (then when it is next placed); otherwise when it is next placed. Returns an error, a note, or null.
         /// </summary>
         internal static string SetReplacement(SceneCharacter chara, string path)
         {
             if (Settings == null) return Tr("No scene is loaded.", "シーンが読み込まれていません。");
-            string name = null;
+            int sex = chara.Female ? 1 : 0;
             if (path != null)
             {
                 var file = new ChaFileControl();
-                if (!file.LoadCharaFile(path, (byte)(chara.Female ? 1 : 0), true, true))
-                    return Tr($"This card can't be used (not a Koikatsu Sunshine {(chara.Female ? "female" : "male")} character card).", $"このカードは読み込めません（コイカツサンシャインの{(chara.Female ? "女性" : "男性")}キャラカードではありません）。");
-                name = file.parameter.fullname;
-                Settings.Replacements[chara.Info.dicKey] = new CardReplacement { Card = CardKey(path), Name = name };
+                if (!file.LoadCharaFile(path, 255, true, true))
+                    return Tr("This card can't be used (not a Koikatsu Sunshine character card).", "このカードは読み込めません（コイカツサンシャインのキャラカードではありません）。");
+                sex = file.parameter.sex;
+                Settings.Replacements.TryGetValue(chara.Info.dicKey, out var old);
+                Settings.Replacements[chara.Info.dicKey] = new CardReplacement
+                {
+                    Card = CardKey(path), Name = file.parameter.fullname, Sex = sex,
+                    // Hidden on a female, shown on a male, until switched
+                    Son = old != null && old.Sex == sex ? old.Son : sex == 0,
+                };
             }
             else
                 Settings.Replacements.Remove(chara.Info.dicKey);
             SaveSettings();
             if (!chara.Placed) return null;
+            if (chara.Oci.sex != sex)
+                return Tr("Saved. The sex changes, so the character changes the next time H starts.", "保存しました。性別が変わるので、次にHを始めたときに変わります。");
 
             try
             {
@@ -1032,6 +1057,17 @@ namespace KKS_FreeHStudioSceneLoader
                 return Tr("Could not replace the character (see output_log.txt).", "キャラクターを差し替えられませんでした（output_log.txt を確認してください）。");
             }
             return null;
+        }
+
+        /// <summary>A character replaced with a card of the other sex: whether it shows the penis.</summary>
+        internal static bool SonShown(SceneCharacter chara) => chara.SexChanged && Settings.Replacements[chara.Info.dicKey].Son;
+
+        internal static void SetSon(SceneCharacter chara, bool shown)
+        {
+            if (!chara.SexChanged || SonShown(chara) == shown) return;
+            Settings.Replacements[chara.Info.dicKey].Son = shown;
+            SaveSettings();
+            if (chara.Placed && chara.Oci.sex == 1 != chara.Female) chara.Oci.SetVisibleSon(shown);
         }
 
         private static void ChangeCard(SceneCharacter chara, string path)

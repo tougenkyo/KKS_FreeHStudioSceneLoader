@@ -21,7 +21,7 @@ namespace KKS_FreeHStudioSceneLoader
     {
         public const string GUID = "local.kks.freehstudiosceneloader";
         public const string PluginName = "Free H Studio Scene Loader (KKS port, experimental)";
-        public const string Version = "0.6.4";
+        public const string Version = "0.6.5";
 
         internal static new ManualLogSource Logger;
         internal static FreeHStudioSceneLoader Instance;
@@ -292,6 +292,17 @@ namespace KKS_FreeHStudioSceneLoader
             }
         }
 
+        /// <summary>A map was chosen in the game's own map selection: unsets the scene, like 解除 (the details stay shown).</summary>
+        internal void OnNormalMapChosen()
+        {
+            if (!Selection.IsSelected) return;
+            // The game sets the chosen map right after this; until then the map shown stays the current one
+            Selection.ForgetMapBefore();
+            Selection.Unset(_freeH);
+            LastScene.Value = "";
+            _status = Tr("Unset: a map was chosen in the normal map selection. Click a scene again to set it.", "通常のマップ選択でマップを選んだので、シーンを解除しました。もう一度シーンをクリックするとセットします。");
+        }
+
         internal void OnFreeHSceneStart(FreeHScene freeH)
         {
             _freeH = freeH;
@@ -424,6 +435,8 @@ namespace KKS_FreeHStudioSceneLoader
         private string[] _cardPending;
         private int _cardPendingIndex;
         private bool? _cardListFemale;
+        /// <summary>The character cards listed are female ones (a character can be replaced with the other sex).</summary>
+        private bool _cardFemale;
         /// <summary>The list shows coordinate cards (to put on) instead of character cards (to replace with).</summary>
         private bool _cardCoordinates;
         private bool? _cardListCoordinates;
@@ -435,7 +448,7 @@ namespace KKS_FreeHStudioSceneLoader
         private FolderChooser _cardFolder;
 
         /// <summary>The setting holding the folder of the list now shown (female cards, male cards or coordinates).</summary>
-        private ConfigEntry<string> CardFolderEntry => _cardCoordinates ? CoordinateFolder : _cardTarget != null && _cardTarget.Female ? CardFolderFemale : CardFolderMale;
+        private ConfigEntry<string> CardFolderEntry => _cardCoordinates ? CoordinateFolder : _cardFemale ? CardFolderFemale : CardFolderMale;
 
         /// <summary>
         /// The folder a list is read from, kept in a setting: typed in, one level up, back to the default, or one of
@@ -552,8 +565,16 @@ namespace KKS_FreeHStudioSceneLoader
             _cardTarget = chara;
             _cardStatus = null;
             _cardCoordinates = coordinates;
+            if (!coordinates) _cardFemale = chara.NowFemale;
+            UpdateCardList();
+        }
+
+        /// <summary>Reads the card list again when another kind of card is to be listed.</summary>
+        private void UpdateCardList()
+        {
+            bool coordinates = _cardCoordinates;
             // Coordinate cards are the same list for both sexes
-            bool? female = coordinates ? (bool?)null : chara.Female;
+            bool? female = coordinates ? (bool?)null : _cardFemale;
             if (_cardListCoordinates != coordinates || _cardListFemale != female)
             {
                 _cardFiles = null;
@@ -575,7 +596,7 @@ namespace KKS_FreeHStudioSceneLoader
                 _focusCardWindow = false;
             }
             _cardWindowRect = KeepOnScreen(GUILayout.Window(GUID.GetHashCode() + 2, _cardWindowRect, DrawCardWindow,
-                _cardCoordinates ? Tr("Coordinate card to load", "読み込むコーデカード") : Tr($"Character card to replace with ({(_cardTarget.Female ? "female" : "male")})", $"差し替えるキャラカード（{(_cardTarget.Female ? "女性" : "男性")}）"), WindowStyle, GUILayout.Width(_cardWindowRect.width)));
+                _cardCoordinates ? Tr("Coordinate card to load", "読み込むコーデカード") : Tr($"Character card to replace with ({(_cardFemale ? "female" : "male")})", $"差し替えるキャラカード（{(_cardFemale ? "女性" : "男性")}）"), WindowStyle, GUILayout.Width(_cardWindowRect.width)));
             _blockRects.Add(_cardWindowRect);
         }
 
@@ -605,11 +626,24 @@ namespace KKS_FreeHStudioSceneLoader
             if (CloseButton(_cardWindowRect)) { _cardTarget = null; return; }
             LanguageButton(_cardWindowRect, true);
             if (_cardCoordinates)
-                GUILayout.Label($"{(chara.Female ? "♀ " : "♂ ")}{chara.DisplayName} ({StudioHost.OutfitName(chara, StudioHost.OutfitType(chara))})" +
+                GUILayout.Label($"{(chara.NowFemale ? "♀ " : "♂ ")}{chara.DisplayName} ({StudioHost.OutfitName(chara, StudioHost.OutfitType(chara))})" +
                                 Tr("   Click a coordinate card to load it into the current outfit (saved per scene).", "　コーデカードをクリックすると、今の服の種類に読み込みます（シーンごとに保存）。"));
             else
-                GUILayout.Label($"{(chara.Female ? "♀ " : "♂ ")}{chara.Name}" + (chara.ReplacedName != null ? Tr($" (now: {chara.ReplacedName})", $"（今: {chara.ReplacedName}）") : "") +
+            {
+                GUILayout.Label($"{(chara.Female ? "♀ " : "♂ ")}{chara.Name}" + (chara.ReplacedName != null ? Tr($" (now: {SexMark(chara)}{chara.ReplacedName})", $"（今: {SexMark(chara)}{chara.ReplacedName}）") : "") +
                                 Tr("   Click a card to replace the character with it. The pose and clothes state stay as in the scene (saved per scene).", "　カードをクリックすると差し替えます。ポーズと服の状態はシーンのままです（シーンごとに保存）。"));
+                // A card of the other sex changes the character's sex (posed as in the scene)
+                GUILayout.BeginHorizontal();
+                bool female = GUILayout.Toolbar(_cardFemale ? 0 : 1, new[] { Tr("Female cards", "女性カード"), Tr("Male cards", "男性カード") }, GUILayout.Width(220)) == 0;
+                if (female != _cardFemale)
+                {
+                    _cardFemale = female;
+                    UpdateCardList();
+                }
+                if (_cardFemale != chara.Female)
+                    GUILayout.Label(Tr($"The character becomes {(_cardFemale ? "female" : "male")}.", $"{(_cardFemale ? "女性" : "男性")}に変わります。"));
+                GUILayout.EndHorizontal();
+            }
             GUILayout.BeginHorizontal();
             GUILayout.Label(Tr("Filter:", "絞り込み:"), GUILayout.Width(60));
             _cardFilter = GUILayout.TextField(_cardFilter);
@@ -1126,7 +1160,7 @@ namespace KKS_FreeHStudioSceneLoader
                     GUILayout.Space(14);
                     GUILayout.BeginVertical(_outfitOpen == chara ? ChosenFrameStyle : FrameStyle);
                     GUILayout.BeginHorizontal();
-                    StudioHost.SetCharacterEnabled(chara, GUILayout.Toggle(chara.Enabled, (chara.Female ? "♀ " : "♂ ") + chara.Name + (chara.ReplacedName != null ? $" → {chara.ReplacedName}" : "")));
+                    StudioHost.SetCharacterEnabled(chara, GUILayout.Toggle(chara.Enabled, (chara.Female ? "♀ " : "♂ ") + chara.Name + (chara.ReplacedName != null ? $" → {SexMark(chara)}{chara.ReplacedName}" : "")));
                     DrawReplaceButtons(chara);
                     bool open = _outfitOpen == chara;
                     if (GUILayout.Button(open ? Tr("Clothes ▲", "服 ▲") : Tr("Clothes ▼", "服 ▼"), GUILayout.ExpandWidth(false))) _outfitOpen = open ? null : chara;
@@ -1207,7 +1241,12 @@ namespace KKS_FreeHStudioSceneLoader
             if (GUILayout.Button(Tr("Replace", "差し替え"), GUILayout.ExpandWidth(false))) OpenCardWindow(chara, false);
             if (chara.ReplacedName != null && GUILayout.Button(Tr("Original", "戻す"), GUILayout.ExpandWidth(false)))
                 _cardStatus = StudioHost.SetReplacement(chara, null) ?? Tr($"Back to {chara.Name}.", $"{chara.Name} に戻しました。");
+            if (chara.SexChanged)
+                StudioHost.SetSon(chara, GUILayout.Toggle(StudioHost.SonShown(chara), Tr("Penis", "ちんちん"), GUILayout.ExpandWidth(false)));
         }
+
+        /// <summary>The sex mark before the name of the card a character is replaced with, when the sex changes.</summary>
+        private static string SexMark(StudioHost.SceneCharacter chara) => chara.SexChanged ? (chara.Female ? "♂ " : "♀ ") : "";
 
         /// <summary>The scene's sounds: when it is loaded (selection window) and while it is placed (H window). Saved per scene.</summary>
         private static void DrawSoundChoice()
@@ -1459,7 +1498,7 @@ namespace KKS_FreeHStudioSceneLoader
                 var visible = StudioHost.IsVisible(chara);
                 var newVisible = GUILayout.Toggle(visible, Tr("Show", "表示"), GUILayout.Width(56));
                 if (newVisible != visible) StudioHost.SetVisible(chara, newVisible);
-                var label = (chara.Female ? "♀ " : "♂ ") + chara.DisplayName;
+                var label = (chara.NowFemale ? "♀ " : "♂ ") + chara.DisplayName;
                 if (GUILayout.Button(label, chara == _selectedChara ? GUI.skin.box : GUI.skin.button)) _selectedChara = chara;
                 DrawReplaceButtons(chara);
                 GUILayout.EndHorizontal();
@@ -1716,7 +1755,7 @@ namespace KKS_FreeHStudioSceneLoader
             FreeHStudioSceneLoader.Logger.LogInfo($"Selected studio scene {ScenePath} (no studio map), H positions from Free H map {param.No} ({param.MapName})");
             return FreeHStudioSceneLoader.Tr($"Set. This scene has no base map, so the H positions of \"{param.DisplayName}\" are used", $"セットしました。このシーンには土台のマップがないため、「{param.DisplayName}」のH位置を使います") +
                    (FreeHStudioSceneLoader.HideBaseMap.Value ? FreeHStudioSceneLoader.Tr(" (the map itself is hidden).", "（マップ自体は表示しません）。") : FreeHStudioSceneLoader.Tr(".", "。")) +
-                   FreeHStudioSceneLoader.Tr("\nThe scene is placed so that its female character stands at the H start position. Choosing another map in the normal map selection changes only the H positions.", "\nシーンは、シーン内の女の子の位置がHの開始位置に来るように置きます。通常のマップ選択で別のマップを選ぶと、H位置だけ変わります。");
+                   FreeHStudioSceneLoader.Tr("\nThe scene is placed so that its female character stands at the H start position. Choosing a map in the normal map selection unsets the scene.", "\nシーンは、シーン内の女の子の位置がHの開始位置に来るように置きます。通常のマップ選択でマップを選ぶと、シーンは解除されます。");
         }
 
         /// <summary>Stops using the scene for H (its details stay shown) and shows the normal map again.</summary>
@@ -1799,14 +1838,6 @@ namespace KKS_FreeHStudioSceneLoader
             freeH.member.resultMapInfo.Value = param;
             Hooks.ApplySceneThumbnail(freeH);
             FreeHStudioSceneLoader.Logger.LogInfo($"Studio scene now on Free H map {param.No} ({param.MapName})");
-        }
-
-        internal static void ChangeBaseMap(MapInfo.Param param)
-        {
-            ForgetMapBefore();
-            MapNo = param.No;
-            BaseMapName = param.DisplayName;
-            FreeHStudioSceneLoader.Logger.LogInfo($"H positions for the studio scene now from Free H map {param.No} ({param.MapName})");
         }
 
         internal static void Clear()

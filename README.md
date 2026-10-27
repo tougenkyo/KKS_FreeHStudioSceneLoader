@@ -25,7 +25,7 @@ Copy `KKS_FreeHStudioSceneLoader.dll` into `BepInEx/plugins/` (a subfolder such 
 ## Usage
 1. Open Free H. Click the "Choose a studio scene" button or press **F7** (both configurable).
 2. Wait for the studio lists to load (first time only). Scenes from `UserData/studio/scene` are listed as thumbnails or file names. Another folder can be typed in or picked from the subfolders above the list (remembered in the config).
-3. Click a scene. This sets it for H, lists any mods it needs that are missing, and shows its settings. "Unset" goes back to the normal map.
+3. Click a scene. This sets it for H, lists any mods it needs that are missing, and shows its settings. "Unset", or choosing a map in the game's own map selection, goes back to the normal map.
 4. Start H as usual. The scene's items, folders, lights and characters are placed on the map.
 
 The scene set last is set again when Free H opens, also after the game is restarted (until it is unset; see Scenes / Set the last scene again).
@@ -46,6 +46,7 @@ Saved per scene file in `BepInEx/config/KKS_FreeHStudioSceneLoader.scenes.xml`.
 - **Time of day**: optionally use the scene's time of day for the Free H map.
 - **Characters**: placed posed as in Studio (decoration only, they do not take part in H). Each one, or all females / all males, can be switched off.
   - "Replace" swaps a character for another card (pose and clothes state stay as in the scene); "Original" brings the original back.
+    The card list can be switched to the other sex: a male can be replaced with a female card (and the other way round). Such a character changes sex the next time H starts, and gets a "Penis" switch (off for a female, on for a male).
   - "Clothes ▼" chooses the outfit (including MoreOutfits slots), loads a coordinate card, and sets all clothes on / half / off.
   - Cards are listed from `UserData/chara/female`, `UserData/chara/male` and `UserData/coordinate` by default. Another folder can be typed in or picked from the subfolders in the card window (remembered in the config).
 - **Sounds**: the scene's sound/voice items and the characters' voice lists.
@@ -66,7 +67,7 @@ The game's point move (場所移動, the pin icon) also offers the places where 
 - Character silhouettes (Studio's 「シルエット」).
 
 ### Scenes without a studio map
-Scenes whose background is built from items: the map chosen in Free H provides the H positions and is hidden, and the scene is placed so that its female character stands at the H start position. Choose the Free H map before picking the scene, or change it afterwards in the normal map selection.
+Scenes whose background is built from items: the map chosen in Free H provides the H positions and is hidden, and the scene is placed so that its female character stands at the H start position. Choose the Free H map before picking the scene (choosing a map in the normal map selection afterwards unsets the scene).
 
 ### Known limitations
 - Scenes whose studio map has no Free H version are not supported.
@@ -127,7 +128,7 @@ Output: `bin/Release/KKS_FreeHStudioSceneLoader.dll`.
 ### 使い方
 1. フリーHの画面で「Choose a studio scene」（日本語表示では「スタジオシーンを選ぶ」）ボタンを押すか、F7 キーを押します。
 2. `UserData/studio/scene` のシーンが一覧になります（サムネイルとファイル名を切り替えられます）。一覧の上で別のフォルダやサブフォルダを指定できます。
-3. シーンをクリックするとHにセットされ、足りないMODの確認と、シーンの設定が表示されます。「解除」で元のマップに戻ります。
+3. シーンをクリックするとHにセットされ、足りないMODの確認と、シーンの設定が表示されます。「解除」するか、ゲームの通常のマップ選択でマップを選ぶと、元のマップに戻ります。
 4. いつもどおりHを始めると、シーンのアイテム・フォルダ・ライト・キャラクターがマップに置かれます。
 
 最後にセットしたシーンは、ゲームを起動し直したあとも、フリーHを開くと自動でセットされます（解除するまで）。
@@ -144,7 +145,7 @@ Output: `bin/Release/KKS_FreeHStudioSceneLoader.dll`.
 
 ### 主な機能
 - 土台のマップ、時間帯、キャラクター（女性・男性・1人ずつの表示）、音をシーンごとに設定。
-- キャラクターを別のカードに差し替え。服の種類（MoreOutfits の追加コーデを含む）、コーデカードの読み込み、全着・半脱・全脱。カードを探すフォルダは指定できます。
+- キャラクターを別のカードに差し替え（男性を女性のカードに、女性を男性のカードにもできます。性別は次にHを始めたときに変わり、「ちんちん」の表示を切り替えられます）。服の種類（MoreOutfits の追加コーデを含む）、コーデカードの読み込み、全着・半脱・全脱。カードを探すフォルダは指定できます。
 - H中の窓：キャラクターの表示・服・差し替え、移動と回転（1人、NodesConstraints でつながったアイテムごと、シーン全体）、配置の保存（3スロット。最後に保存したスロットを自動で再現できます）。
 - ゲームの「場所移動」（ピンのアイコン）に、シーンのキャラクターが立っている場所を追加します。
 - シーンの影・ブルーム・AO・環境光、マップのないシーンの Studio と同じ照明、シルエット表示。
