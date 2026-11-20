@@ -108,7 +108,7 @@ namespace KKS_FreeHStudioSceneLoader
         private static readonly string SceneRoot = Path.GetFullPath(Path.Combine(BepInEx.Paths.GameRootPath, "UserData/studio/scene"));
         private static Dictionary<string, SceneSettings> _all;
 
-        private static string Key(string scenePath)
+        internal static string Key(string scenePath)
         {
             var full = Path.GetFullPath(scenePath);
             if (full.StartsWith(SceneRoot, StringComparison.OrdinalIgnoreCase)) full = full.Substring(SceneRoot.Length);

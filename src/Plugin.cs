@@ -21,7 +21,7 @@ namespace KKS_FreeHStudioSceneLoader
     {
         public const string GUID = "local.kks.freehstudiosceneloader";
         public const string PluginName = "Free H Studio Scene Loader (KKS port, experimental)";
-        public const string Version = "0.6.5";
+        public const string Version = "0.6.6";
 
         internal static new ManualLogSource Logger;
         internal static FreeHStudioSceneLoader Instance;
@@ -43,6 +43,8 @@ namespace KKS_FreeHStudioSceneLoader
         internal static ConfigEntry<HasFilter> FilterAnimation;
         internal static ConfigEntry<CharacterFilter> FilterCharacters;
         internal static ConfigEntry<HasFilter> FilterMissingMods;
+        internal static ConfigEntry<bool> FilterFavorites;
+        internal static ConfigEntry<int> ScenesPerPage;
         internal static ConfigEntry<bool> LoadFemales;
         internal static ConfigEntry<bool> LoadMales;
         internal static ConfigEntry<bool> LoadLights;
@@ -103,6 +105,10 @@ namespace KKS_FreeHStudioSceneLoader
                 "List only the scenes with female characters only, male characters only, or both. Uses the scene data list.");
             FilterMissingMods = Config.Bind("Scenes", "Filter: missing mods", HasFilter.All,
                 "List only the scenes with mod errors: mods that are not installed, a Sideloader error, or a file that can't be read (or the ones without). Uses the scene data list.");
+            FilterFavorites = Config.Bind("Scenes", "Filter: favorites only", false,
+                "List only the favorite scenes (checked with ★ in the scene list).");
+            ScenesPerPage = Config.Bind("Scenes", "Scenes per page", 60,
+                new ConfigDescription("How many scenes a page of the scene list shows (0 = all on one page). Also set in the selection window.", new AcceptableValueList<int>(PageSizes)));
             LoadFemales = Config.Bind("General", "Load studio female characters", true,
                 "Default for scenes not set up yet: also load the female characters of the studio scene, posed as in the scene. They are only decoration and do not take part in H. Each scene keeps its own setting once changed in the scene selection window.");
             LoadMales = Config.Bind("General", "Load studio male characters", true,
@@ -154,7 +160,7 @@ namespace KKS_FreeHStudioSceneLoader
             {
                 Entry = () => SceneFolder,
                 IncludeSubfolders = SceneSubfolders,
-                Changed = () => { _reloadRequested = true; _scroll = Vector2.zero; },
+                Changed = () => { _reloadRequested = true; _scroll = Vector2.zero; _page = 0; },
                 Error = message => _status = message,
                 MaxRows = 2,
             };
@@ -223,6 +229,7 @@ namespace KKS_FreeHStudioSceneLoader
                 Logger.LogWarning($"Pose probe patch failed (diagnostics only): {ex.GetBaseException().Message}");
             }
             Logger.Log(failed == 0 ? LogLevel.Info : LogLevel.Warning, $"Patches applied: {ok}, failed: {failed}");
+            MapSunFix.Install();
         }
 
         private static System.Reflection.MethodBase PatchTools_GetOriginal(HarmonyMethod attr)
@@ -284,6 +291,7 @@ namespace KKS_FreeHStudioSceneLoader
             if (_showWindow)
             {
                 _files = null;
+                _jumpToChosen = true;
                 StudioHost.EnsureCreated();
                 // Show the scene whose details are loaded; a preview left from before (its data was discarded when the
                 // Free H screen restarted) would look chosen while nothing is set
@@ -816,13 +824,14 @@ namespace KKS_FreeHStudioSceneLoader
         {
             GUILayout.BeginHorizontal();
             GUILayout.Label(Tr("Filter:", "絞り込み:"), GUILayout.Width(60));
-            _filter = GUILayout.TextField(_filter);
+            var filter = GUILayout.TextField(_filter);
+            if (filter != _filter) { _filter = filter; FirstPage(); }
             if (GUILayout.Button(Tr("Reload", "再読込"), GUILayout.Width(70))) _reloadRequested = true;
             GUILayout.EndHorizontal();
             _sceneFolder.Draw();
             DrawFilters();
             // Worked out once per layout pass, so the layout and the repaint pass show the same scenes
-            if (_shown == null || Event.current.type == EventType.Layout) UpdateShownScenes();
+            if (_shown == null || Event.current.type == EventType.Layout) { UpdateShownScenes(); UpdatePages(); }
 
             if (_pending != null)
                 GUILayout.Label(Tr($"Checking scene files… {_pendingIndex}/{_pending.Length} (PNGs that are not scenes are not listed)", $"シーンファイルを確認中… {_pendingIndex}/{_pending.Length}（シーン以外のPNGは表示しません）"));
@@ -836,18 +845,23 @@ namespace KKS_FreeHStudioSceneLoader
                 DrawThumbnailGrid();
             else
             {
-                foreach (var f in _shown.ToArray())
+                foreach (var f in _pageScenes.ToArray())
                 {
                     var rel = ListName(f);
                     var marks = DataListMarks(f);
                     if (marks.Length > 0) rel += "   (" + marks + ")";
                     var style = f == _previewPath ? GUI.skin.box : GUI.skin.button;
+                    GUILayout.BeginHorizontal();
+                    bool fav = Favorites.IsFavorite(f);
+                    if (GUILayout.Toggle(fav, "★", GUILayout.Width(FavoriteWidth)) != fav) Favorites.Set(f, !fav);
                     // Clicking a scene reads it and sets it for H (clicking it again after 解除 sets it again)
-                    if (GUILayout.Button(rel, style, GUILayout.Width(ListColumnWidth - 30)) && (f != _previewPath || Selection.PreviewPath != f || Selection.ScenePath != f))
+                    if (GUILayout.Button(rel, style, GUILayout.Width(ListColumnWidth - 34 - FavoriteWidth)) && (f != _previewPath || Selection.PreviewPath != f || Selection.ScenePath != f))
                         ChooseScene(f);
+                    GUILayout.EndHorizontal();
                 }
             }
             GUILayout.EndScrollView();
+            DrawPages();
 
             // The name list shows the chosen scene's image below it; the thumbnails take that space instead.
             // Fixed size so the window does not grow to the texture size
@@ -874,6 +888,87 @@ namespace KKS_FreeHStudioSceneLoader
             if (thumbs != ShowThumbnails.Value) ShowThumbnails.Value = thumbs;
             GUILayout.EndHorizontal();
         }
+
+        private const float FavoriteWidth = 36f;
+
+        #region Pages of the scene list
+
+        private static readonly int[] PageSizes = { 0, 30, 60, 120, 240 };
+        private static readonly string[] PageSizeNamesEn = { "All", "30", "60", "120", "240" };
+        private static readonly string[] PageSizeNamesJa = { "全部", "30", "60", "120", "240" };
+        private static string[] PageSizeNames => Japanese ? PageSizeNamesJa : PageSizeNamesEn;
+        private int _page;               // shown page (from 0)
+        private int _pageCount = 1;
+        private List<string> _pageScenes; // the scenes of the shown page (worked out with _shown)
+        private bool _jumpToChosen;      // show the page of the chosen scene once the list is read (window opened)
+
+        private void SetPage(int page)
+        {
+            page = Mathf.Clamp(page, 0, _pageCount - 1);
+            if (page == _page) return;
+            _page = page;
+            _scroll = Vector2.zero;
+        }
+
+        /// <summary>The filters changed: back to the first page.</summary>
+        private void FirstPage()
+        {
+            _page = 0;
+            _scroll = Vector2.zero;
+        }
+
+        /// <summary>Splits the shown scenes into pages (after <see cref="UpdateShownScenes"/>).</summary>
+        private void UpdatePages()
+        {
+            int per = ScenesPerPage.Value;
+            if (per <= 0)
+            {
+                _pageCount = 1;
+                _page = 0;
+                _pageScenes = _shown;
+            }
+            else
+            {
+                _pageCount = Math.Max(1, (_shown.Count + per - 1) / per);
+                if (_jumpToChosen && _pending == null)
+                {
+                    int index = _previewPath != null ? _shown.IndexOf(_previewPath) : -1;
+                    if (index >= 0 && index / per != _page) { _page = index / per; _scroll = Vector2.zero; }
+                }
+                _page = Mathf.Clamp(_page, 0, _pageCount - 1);
+                _pageScenes = _shown.Skip(_page * per).Take(per).ToList();
+            }
+            if (_pending == null) _jumpToChosen = false;
+        }
+
+        private void DrawPages()
+        {
+            GUILayout.BeginHorizontal();
+            GUI.enabled = _page > 0;
+            if (GUILayout.Button("<<", GUILayout.Width(34))) SetPage(0);
+            if (GUILayout.Button("<", GUILayout.Width(34))) SetPage(_page - 1);
+            GUI.enabled = true;
+            GUILayout.Label(Tr($"Page {_page + 1}/{_pageCount}", $"{_page + 1}/{_pageCount} ページ"), GUILayout.Width(90));
+            GUI.enabled = _page < _pageCount - 1;
+            if (GUILayout.Button(">", GUILayout.Width(34))) SetPage(_page + 1);
+            if (GUILayout.Button(">>", GUILayout.Width(34))) SetPage(_pageCount - 1);
+            GUI.enabled = true;
+            GUILayout.FlexibleSpace();
+            GUILayout.Label(Tr("Per page:", "1ページ:"), GUILayout.ExpandWidth(false));
+            int current = Array.IndexOf(PageSizes, ScenesPerPage.Value);
+            int chosen = GUILayout.Toolbar(current, PageSizeNames, GUILayout.Width(200));
+            if (chosen != current && chosen >= 0)
+            {
+                // Keep the first scene of the page in view
+                int first = ScenesPerPage.Value > 0 ? _page * ScenesPerPage.Value : 0;
+                ScenesPerPage.Value = PageSizes[chosen];
+                _page = PageSizes[chosen] > 0 ? first / PageSizes[chosen] : 0;
+                _scroll = Vector2.zero;
+            }
+            GUILayout.EndHorizontal();
+        }
+
+        #endregion
 
         private const float ListHeight = 250f;
         private const float PreviewHeight = 180f;
@@ -907,7 +1002,7 @@ namespace KKS_FreeHStudioSceneLoader
         {
             if (_thumbLabelStyle == null)
                 _thumbLabelStyle = new GUIStyle(GUI.skin.label) { fontSize = 11, alignment = TextAnchor.UpperCenter, wordWrap = false, clipping = TextClipping.Clip };
-            var files = _shown;
+            var files = _pageScenes;
             float width = ListColumnWidth - 30f;
             float cellW = (width - ThumbGap * (ThumbColumns - 1)) / ThumbColumns;
             float imageH = cellW * 9f / 16f;
@@ -926,6 +1021,15 @@ namespace KKS_FreeHStudioSceneLoader
                     var f = files[index];
                     var cell = new Rect(area.x + col * (cellW + ThumbGap), area.y + row * cellH, cellW, imageH + ThumbLabelHeight);
                     bool chosen = f == _previewPath;
+                    // The ★ checkbox in the top right corner: handled before the cell's button, which would take the click
+                    var favRect = new Rect(cell.xMax - FavoriteWidth - 2, cell.y + 2, FavoriteWidth, ThumbLabelHeight + 2);
+                    bool fav = Favorites.IsFavorite(f);
+                    if (Event.current.type == EventType.MouseDown && Event.current.button == 0 && favRect.Contains(Event.current.mousePosition))
+                    {
+                        Favorites.Set(f, !fav);
+                        fav = !fav;
+                        Event.current.Use();
+                    }
                     if (GUI.Button(cell, GUIContent.none) && (f != _previewPath || Selection.PreviewPath != f || Selection.ScenePath != f))
                         ChooseScene(f);
                     if (chosen && Event.current.type == EventType.Repaint) DrawFrame(cell, ChosenFrameColor, 3f);
@@ -940,6 +1044,14 @@ namespace KKS_FreeHStudioSceneLoader
                     GUI.Label(new Rect(cell.x, cell.y + imageH - 2, cell.width, ThumbLabelHeight), name, _thumbLabelStyle);
                     if (chosen && Selection.ScenePath == f && Event.current.type == EventType.Repaint)
                         GUI.Label(new Rect(cell.x + 4, cell.y + 2, cell.width, ThumbLabelHeight), Tr("In use", "セット中"), _thumbLabelStyle);
+                    if (Event.current.type == EventType.Repaint)
+                    {
+                        var old = GUI.color;
+                        GUI.color = new Color(0f, 0f, 0f, 0.5f);
+                        GUI.DrawTexture(favRect, Texture2D.whiteTexture);
+                        GUI.color = old;
+                        GUI.Toggle(new Rect(favRect.x + 2, favRect.y + 1, favRect.width - 2, favRect.height - 2), fav, "★");
+                    }
                     var marks = DataListMarks(f);
                     if (marks.Length > 0 && Event.current.type == EventType.Repaint)
                     {
@@ -1030,7 +1142,11 @@ namespace KKS_FreeHStudioSceneLoader
                 GUILayout.Label(Tr("Click a scene in the list on the left to set it for Free H. Its details and settings (base map, time of day, characters, sounds) appear here. Settings are saved per scene.", "左の一覧でシーンをクリックすると、フリーHにセットして、ここにシーンの詳細と設定（土台のマップ、時間帯、キャラクター、音）を出します。設定はシーンごとに保存します。"));
                 return;
             }
+            GUILayout.BeginHorizontal();
             GUILayout.Label(Tr($"Scene: {Path.GetFileNameWithoutExtension(Selection.PreviewPath)}", $"シーン: {Path.GetFileNameWithoutExtension(Selection.PreviewPath)}"));
+            bool favorite = Favorites.IsFavorite(Selection.PreviewPath);
+            if (GUILayout.Toggle(favorite, Tr("★ Favorite", "★ お気に入り"), GUILayout.ExpandWidth(false)) != favorite) Favorites.Set(Selection.PreviewPath, !favorite);
+            GUILayout.EndHorizontal();
             GUILayout.Label(Selection.ScenePath == Selection.PreviewPath ? Tr("Status: set (H starts with this scene)", "状態: セット済み（このシーンでHを始めます）") : Tr("Status: not set (click it in the list again to set it)", "状態: 未セット（左の一覧でもう一度クリックするとセットします）"));
             GUILayout.Label(Selection.MapDescription);
             DrawMissingMods();
@@ -1319,9 +1435,11 @@ namespace KKS_FreeHStudioSceneLoader
             _shown = new List<string>();
             _notInDataList = 0;
             bool filtersOn = FiltersOn;
+            bool favoritesOnly = FilterFavorites.Value;
             foreach (var f in _files)
             {
                 if (_filter.Length > 0 && ListName(f).IndexOf(_filter, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                if (favoritesOnly && !Favorites.IsFavorite(f)) continue;
                 if (filtersOn)
                 {
                     var summary = SceneIndex.Get(f);
@@ -1351,10 +1469,13 @@ namespace KKS_FreeHStudioSceneLoader
             GUILayout.BeginHorizontal();
             GUILayout.Label(Tr("Characters:", "キャラ:"), GUILayout.Width(70));
             var charas = (CharacterFilter)GUILayout.Toolbar((int)FilterCharacters.Value, CharacterFilterNames, GUILayout.Width(330));
+            GUILayout.Space(10);
+            var favorites = GUILayout.Toggle(FilterFavorites.Value, Tr("★ only", "★のみ"));
             GUILayout.EndHorizontal();
-            if (anim != FilterAnimation.Value) FilterAnimation.Value = anim;
-            if (mods != FilterMissingMods.Value) FilterMissingMods.Value = mods;
-            if (charas != FilterCharacters.Value) FilterCharacters.Value = charas;
+            if (anim != FilterAnimation.Value) { FilterAnimation.Value = anim; FirstPage(); }
+            if (mods != FilterMissingMods.Value) { FilterMissingMods.Value = mods; FirstPage(); }
+            if (charas != FilterCharacters.Value) { FilterCharacters.Value = charas; FirstPage(); }
+            if (favorites != FilterFavorites.Value) { FilterFavorites.Value = favorites; FirstPage(); }
 
             GUILayout.BeginHorizontal();
             if (_dataQueue != null)

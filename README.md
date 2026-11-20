@@ -38,6 +38,10 @@ To know this the whole scene has to be read, which takes as long as choosing it,
 - "Remake all" reads every scene again, e.g. after installing mods.
 - While a filter is on, scenes not in the data list are left out (their number is shown). Scenes in the list show what they contain on the thumbnail (F = females, M = males, Anim, Missing mods, Mod error).
 
+Favorites: check ★ on a scene (top right of the thumbnail, left of the file name, or next to the scene name in the settings) and "★ only" lists only the favorites. They are kept in `BepInEx/config/KKS_FreeHStudioSceneLoader.favorites.txt` and need no data list.
+
+Pages: the list shows 60 scenes per page by default ("Per page" below the list: All / 30 / 60 / 120 / 240). Opening the window shows the page of the chosen scene.
+
 The windows are in English by default. The 日本語 / English button at the top right of each window (or General / Language in the config) switches the language.
 
 ### Scene settings (selection window)
@@ -101,6 +105,8 @@ Settings are in `BepInEx/config/local.kks.freehstudiosceneloader.cfg` (or the Co
 | Scenes | Include subfolders | on | |
 | Scenes | Set the last scene again | on | Set the last scene when Free H opens after a restart |
 | Scenes | Filter: Timeline animation / characters / missing mods | All | The filters of the scene list (also set in the window) |
+| Scenes | Filter: favorites only | off | List only the scenes checked with ★ |
+| Scenes | Scenes per page | 60 | 0 = all on one page |
 | Diagnostics | Log character poses / Log scene lighting | off | For comparing with Studio |
 
 ## Building
@@ -140,6 +146,10 @@ Output: `bin/Release/KKS_FreeHStudioSceneLoader.dll`.
 - 「データリスト作成」：まだリストにないシーンと、変更されたシーンを読みます（1フレームに少しずつ。窓を閉じても続き、中止できます）。選んだシーンもリストに入ります。
 - 「全部作り直す」：すべてのシーンを読み直します（MODを入れたあとなど）。
 - 絞り込み中は、データリストにないシーンは表示しません（件数を表示します）。リストにあるシーンは、サムネイルに中身を表示します（女・男の人数、アニメ、MOD不足の種類数、MODエラー）。
+
+お気に入り：シーンの ★ にチェックを入れて（サムネイルの右上、ファイル名の左、または設定のシーン名の横）、「★のみ」にするとお気に入りだけを表示します。`BepInEx/config/KKS_FreeHStudioSceneLoader.favorites.txt` に保存し、データリストは要りません。
+
+ページ：一覧は既定で 1ページ 60 件ずつ表示します（一覧の下の「1ページ」で 全部／30／60／120／240）。窓を開くと、選んでいるシーンのページを表示します。
 
 表示は英語が既定です。窓の右上の「日本語」ボタン（または設定の General / Language）で日本語に切り替えられます。
 
