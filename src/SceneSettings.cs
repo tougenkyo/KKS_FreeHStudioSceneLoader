@@ -24,6 +24,10 @@ namespace KKS_FreeHStudioSceneLoader
         public bool CharaVoices;
         /// <summary>Set the Free H time of day to the scene's (Studio's map light: morning, day, evening, night).</summary>
         public bool MatchTime;
+        /// <summary>Keep the H map's camera effects (fog, depth of field, vignette); off: the scene's own, as in Studio.</summary>
+        public bool MapEffects;
+        /// <summary>Show the scene's blur and depth of field items (screen effects focused for Studio's camera).</summary>
+        public bool BlurItems;
         /// <summary>The Free H map chosen when several use the scene's studio map (-1: not chosen).</summary>
         public int FreeHMap = -1;
         /// <summary>dicKey of the characters turned off in the selection window.</summary>
@@ -129,6 +133,8 @@ namespace KKS_FreeHStudioSceneLoader
             SoundItems = FreeHStudioSceneLoader.PlaySoundItems.Value,
             CharaVoices = FreeHStudioSceneLoader.PlayCharaVoices.Value,
             MatchTime = FreeHStudioSceneLoader.MatchTimeOfDay.Value,
+            MapEffects = FreeHStudioSceneLoader.MapEffects.Value,
+            BlurItems = FreeHStudioSceneLoader.BlurItems.Value,
         };
 
         private static bool ReadBool(XmlElement e, string name, bool fallback) =>
@@ -227,6 +233,8 @@ namespace KKS_FreeHStudioSceneLoader
                     e.SetAttribute("soundItems", kv.Value.SoundItems ? "true" : "false");
                     e.SetAttribute("charaVoices", kv.Value.CharaVoices ? "true" : "false");
                     e.SetAttribute("matchTime", kv.Value.MatchTime ? "true" : "false");
+                    e.SetAttribute("mapEffects", kv.Value.MapEffects ? "true" : "false");
+                    e.SetAttribute("blurItems", kv.Value.BlurItems ? "true" : "false");
                     if (kv.Value.FreeHMap >= 0) e.SetAttribute("freeHMap", kv.Value.FreeHMap.ToString());
                     if (kv.Value.HiddenCharacters.Count > 0)
                         e.SetAttribute("hiddenCharacters", string.Join(",", kv.Value.HiddenCharacters.OrderBy(i => i).Select(i => i.ToString()).ToArray()));
@@ -287,6 +295,8 @@ namespace KKS_FreeHStudioSceneLoader
                         SoundItems = ReadBool(e, "soundItems", defaults.SoundItems),
                         CharaVoices = ReadBool(e, "charaVoices", defaults.CharaVoices),
                         MatchTime = ReadBool(e, "matchTime", defaults.MatchTime),
+                        MapEffects = ReadBool(e, "mapEffects", defaults.MapEffects),
+                        BlurItems = ReadBool(e, "blurItems", defaults.BlurItems),
                     };
                     if (int.TryParse(e.GetAttribute("freeHMap"), out var map)) settings.FreeHMap = map;
                     foreach (var s in e.GetAttribute("hiddenCharacters").Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))

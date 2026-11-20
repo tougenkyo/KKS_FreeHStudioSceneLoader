@@ -21,7 +21,7 @@ namespace KKS_FreeHStudioSceneLoader
     {
         public const string GUID = "local.kks.freehstudiosceneloader";
         public const string PluginName = "Free H Studio Scene Loader (KKS port, experimental)";
-        public const string Version = "0.6.6";
+        public const string Version = "0.6.7";
 
         internal static new ManualLogSource Logger;
         internal static FreeHStudioSceneLoader Instance;
@@ -64,6 +64,8 @@ namespace KKS_FreeHStudioSceneLoader
         internal static ConfigEntry<bool> HideBaseMap;
         internal static ConfigEntry<bool> StudioLightingWithoutMap;
         internal static ConfigEntry<bool> UseSceneEffects;
+        internal static ConfigEntry<bool> MapEffects;
+        internal static ConfigEntry<bool> BlurItems;
         internal static ConfigEntry<bool> ShowBackgroundImage;
         internal static ConfigEntry<Color> NoMapBackgroundColor;
         internal static ConfigEntry<bool> ShowButton;
@@ -139,6 +141,10 @@ namespace KKS_FreeHStudioSceneLoader
                 "With the base map hidden, keep its lights (sun, room lights) and its ambient light off the studio items, as in Studio where only the scene's own lights light them.");
             UseSceneEffects = Config.Bind("General", "Use the shadows and bloom of the scene", true,
                 "While a studio scene is placed in H, use its shadow, bloom, ambient occlusion and ambient shadow color settings (saved with the scene in Studio) instead of the game's graphic settings. Without shadows the scene's lights shine through walls.");
+            MapEffects = Config.Bind("General", "Map camera effects", false,
+                "Default for scenes not set up yet: keep the H map's camera effects (fog, depth of field and vignette, the game's graphic settings with the map's values) while a studio scene is placed. Off uses the scene's own settings as in Studio, so nothing is hazy or blurred unless the scene says so. Each scene keeps its own setting once changed in the windows.");
+            BlurItems = Config.Bind("General", "Show blur items of the scene", false,
+                "Default for scenes not set up yet: show the scene's blur and depth of field items (screen effect items such as xukmi FX Depth of Field and Blurred Sphere/Quad, found by their shader). Their focus is set for the camera in Studio, so in H things far from the camera look blurred. Each scene keeps its own setting once changed in the windows.");
             NoMapBackgroundColor = Config.Bind("General", "Background color for scenes without a map", Color.black,
                 "Color drawn behind scenes without a map when the base map is hidden (Studio shows black there).");
             ShowBackgroundImage = Config.Bind("General", "Show studio background image", true,
@@ -1168,6 +1174,7 @@ namespace KKS_FreeHStudioSceneLoader
                     if (match && Selection.IsSelected) Selection.ApplySceneTime(_freeH);
                 }
             }
+            DrawEffectsChoice();
             GUILayout.Space(6);
             DrawCharacterChoice();
             GUILayout.Space(6);
@@ -1363,6 +1370,22 @@ namespace KKS_FreeHStudioSceneLoader
 
         /// <summary>The sex mark before the name of the card a character is replaced with, when the sex changes.</summary>
         private static string SexMark(StudioHost.SceneCharacter chara) => chara.SexChanged ? (chara.Female ? "♂ " : "♀ ") : "";
+
+        /// <summary>The H map's camera effects or the scene's own (selection window and H window). Saved per scene.</summary>
+        private static void DrawEffectsChoice()
+        {
+            var settings = StudioHost.Settings;
+            if (settings == null) return;
+            string OnOff(bool on) => on ? Tr("on", "あり") : Tr("off", "なし");
+            string fog = OnOff(StudioHost.SceneFogOn), dof = OnOff(StudioHost.SceneDepthOn), vignette = OnOff(StudioHost.SceneVignetteOn);
+            StudioHost.SetMapEffects(GUILayout.Toggle(settings.MapEffects,
+                Tr($"Use the H map's fog, depth of field and vignette (off: the scene's own as in Studio; scene: fog {fog}, depth of field {dof}, vignette {vignette})",
+                   $"マップの霧・被写界深度・周辺のぼかしを使う（オフ: スタジオと同じくシーンの設定。シーン: 霧 {fog}、被写界深度 {dof}、周辺 {vignette}）")));
+            string count = StudioHost.HasPlacedScene ? Tr($"; {StudioHost.BlurItemCount} in this scene", $"。このシーンに {StudioHost.BlurItemCount} 個") : "";
+            StudioHost.SetBlurItems(GUILayout.Toggle(settings.BlurItems,
+                Tr($"Show the scene's blur and depth of field items (xukmi FX etc.; focused for Studio's camera, they blur things far from the H camera{count})",
+                   $"シーンのぼかし・被写界深度のアイテムを表示（xukmi FX など。ピントがスタジオのカメラに合わせてあるので、H では遠くがぼやけます{count}）")));
+        }
 
         /// <summary>The scene's sounds: when it is loaded (selection window) and while it is placed (H window). Saved per scene.</summary>
         private static void DrawSoundChoice()
@@ -1720,7 +1743,8 @@ namespace KKS_FreeHStudioSceneLoader
                 if (!string.IsNullOrEmpty(_cardStatus) && _cardTarget == null) GUILayout.Label(_cardStatus);
             }
             DrawLayoutSlots();
-            GUILayout.Label(Tr("Sounds (saved per scene):", "音（シーンごとに保存します）:"));
+            GUILayout.Label(Tr("Camera effects and sounds (saved per scene):", "カメラ効果と音（シーンごとに保存します）:"));
+            DrawEffectsChoice();
             DrawSoundChoice();
             GUILayout.EndVertical();
             if (Event.current.type == EventType.Repaint) _charaContentHeight = GUILayoutUtility.GetLastRect().height;

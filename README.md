@@ -66,7 +66,7 @@ The game's point move (場所移動, the pin icon) also offers the places where 
 
 ### What is reproduced
 - Items, folders (including hidden ones), lights, item scales, colors and patterns, the background image.
-- The scene's shadow, bloom, ambient occlusion and ambient light settings, and Studio's lighting for scenes without a map.
+- The scene's shadow, bloom, ambient occlusion and ambient light settings, and Studio's lighting for scenes without a map. The H map's fog, depth of field and vignette are used only when chosen per scene; otherwise the scene's own, as in Studio. The scene's blur and depth of field items (xukmi FX etc.) are hidden unless chosen per scene.
 - Studio-only plugins whose data is kept in the scene: Timeline, KKPE (bone and blend shape edits), NodesConstraints, and "FK and IK". Timeline camera, color, clothes and some other tracks are not.
 - Character silhouettes (Studio's 「シルエット」).
 
@@ -93,6 +93,8 @@ Settings are in `BepInEx/config/local.kks.freehstudiosceneloader.cfg` (or the Co
 | General | Hide base map for scenes without a map | on | |
 | General | Studio lighting for scenes without a map | on | |
 | General | Use the shadows and bloom of the scene | on | Instead of the game's graphic settings while a scene is placed |
+| General | Map camera effects | off | Default for scenes not set up yet. Off: the scene's own fog, depth of field and vignette as in Studio |
+| General | Show blur items of the scene | off | Default for scenes not set up yet. Blur and depth of field items (xukmi FX etc.) are focused for Studio's camera |
 | General | Background color for scenes without a map | black | |
 | General | Show studio background image | on | |
 | Studio plugins | Play Timeline animation / Apply KKPE pose edits / Apply FK and IK | on | |
@@ -158,7 +160,7 @@ Output: `bin/Release/KKS_FreeHStudioSceneLoader.dll`.
 - キャラクターを別のカードに差し替え（男性を女性のカードに、女性を男性のカードにもできます。性別は次にHを始めたときに変わり、「ちんちん」の表示を切り替えられます）。服の種類（MoreOutfits の追加コーデを含む）、コーデカードの読み込み、全着・半脱・全脱。カードを探すフォルダは指定できます。
 - H中の窓：キャラクターの表示・服・差し替え、移動と回転（1人、NodesConstraints でつながったアイテムごと、シーン全体）、配置の保存（3スロット。最後に保存したスロットを自動で再現できます）。
 - ゲームの「場所移動」（ピンのアイコン）に、シーンのキャラクターが立っている場所を追加します。
-- シーンの影・ブルーム・AO・環境光、マップのないシーンの Studio と同じ照明、シルエット表示。
+- シーンの影・ブルーム・AO・環境光、マップのないシーンの Studio と同じ照明、シルエット表示。マップの霧・被写界深度・周辺のぼかしはシーンごとに選んだときだけ使い、ふだんは Studio と同じくシーンの設定を使います。シーンのぼかし・被写界深度のアイテム（xukmi FX など）も、シーンごとに選んだときだけ表示します。
 - Timeline、KKPE、NodesConstraints、FK and IK のデータを再現（Timeline のカメラ・色・服などのトラックは対象外）。
 
 ### 制限

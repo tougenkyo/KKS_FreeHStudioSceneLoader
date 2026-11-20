@@ -115,6 +115,7 @@ namespace KKS_FreeHStudioSceneLoader
             var camera = proc.flags.ctrlCamera != null ? proc.flags.ctrlCamera.thisCmaera : Camera.main;
             StudioHost.ShowBackground(camera);
             if (FreeHStudioSceneLoader.UseSceneEffects.Value) StudioHost.ApplySceneEffects(camera);
+            StudioHost.ApplySceneCameraEffects(camera);
             if (!noMap)
                 StudioHost.LoadOverlay(proc.map.mapRoot.transform);
 

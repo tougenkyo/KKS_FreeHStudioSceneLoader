@@ -648,6 +648,27 @@ namespace KKS_FreeHStudioSceneLoader
             SaveSettings();
         }
 
+        internal static void SetBlurItems(bool on)
+        {
+            if (Settings == null || Settings.BlurItems == on) return;
+            Settings.BlurItems = on;
+            SaveSettings();
+            ApplyBlurItems();
+        }
+
+        internal static void SetMapEffects(bool on)
+        {
+            if (Settings == null || Settings.MapEffects == on) return;
+            Settings.MapEffects = on;
+            SaveSettings();
+            if (_effectsCamera != null) ApplySceneCameraEffects(_effectsCamera);
+        }
+
+        /// <summary>Whether the scene turns Studio's fog, depth of field and vignette on.</summary>
+        internal static bool SceneFogOn => _sceneInfo != null && _sceneInfo.enableFog;
+        internal static bool SceneDepthOn => _sceneInfo != null && _sceneInfo.enableDepth;
+        internal static bool SceneVignetteOn => _sceneInfo != null && _sceneInfo.enableVignette;
+
         /// <summary>The time of day of the scene's studio map (SunLightInfo.Info.Type: 0 morning .. 3 night).</summary>
         internal static int SceneSunLightType => _sceneInfo != null ? _sceneInfo.sunLightType : -1;
 
@@ -728,6 +749,7 @@ namespace KKS_FreeHStudioSceneLoader
             }
             ApplyScales();
             HideInsideHiddenNodes();
+            ApplyBlurItems();
             FreeHStudioSceneLoader.Logger.LogInfo($"Studio scene objects placed: {loaded}, {lights} of them lights (skipped {skipped} cameras/routes/texts/characters turned off), {_pendingCharacters.Count} character(s) to load");
         }
 
@@ -809,6 +831,7 @@ namespace KKS_FreeHStudioSceneLoader
             }
             ApplyScales();
             HideInsideHiddenNodes();
+            ApplyBlurItems();
             FreeHStudioSceneLoader.Logger.LogInfo($"Studio scene characters placed: {loaded}");
             if (Settings != null && Settings.CharaVoices) PlayVoices();
             if (loaded > 0)
@@ -2062,8 +2085,239 @@ namespace KKS_FreeHStudioSceneLoader
             }
         }
 
+        #region Blur and depth of field items
+
+        private static readonly List<Renderer> _blurRenderers = new List<Renderer>();
+        private static readonly List<Renderer> _hiddenBlurRenderers = new List<Renderer>();
+
+        /// <summary>Words in the shader names of screen effect items that blur (e.g. xukmi/Effects/DOFBokeh, xukmi/Effects/Blur).</summary>
+        private static readonly string[] BlurShaderWords = { "dof", "depthoffield", "bokeh", "blur" };
+
+        private static bool IsBlurShader(Shader shader)
+        {
+            if (shader == null) return false;
+            var name = shader.name.ToLowerInvariant();
+            return BlurShaderWords.Any(w => name.Contains(w));
+        }
+
+        /// <summary>The blur and depth of field items of the placed scene (renderers with such a shader).</summary>
+        internal static int BlurItemCount => _blurRenderers.Count(r => r != null);
+
+        /// <summary>
+        /// Screen effect items that blur, like xukmi FX's Depth of Field (a huge sphere with a depth of field shader)
+        /// and Blurred Sphere/Quad: their focus is set for the camera in Studio, so in H what is far from the camera
+        /// is blurred. Unless the scene is set to show them, keep their renderers off. Characters are left alone.
+        /// </summary>
+        internal static void ApplyBlurItems()
+        {
+            try
+            {
+                foreach (var r in _hiddenBlurRenderers) if (r != null) r.enabled = true;
+                _hiddenBlurRenderers.Clear();
+                _blurRenderers.Clear();
+                if (_overlayRoot == null) return;
+                foreach (var r in _overlayRoot.GetComponentsInChildren<Renderer>(true))
+                {
+                    if (r == null || r.GetComponentInParent<ChaControl>() != null) continue;
+                    if (!r.sharedMaterials.Any(m => m != null && IsBlurShader(m.shader))) continue;
+                    _blurRenderers.Add(r);
+                }
+                bool show = Settings == null || Settings.BlurItems;
+                if (!show)
+                    foreach (var r in _blurRenderers.Where(r => r.enabled))
+                    {
+                        r.enabled = false;
+                        _hiddenBlurRenderers.Add(r);
+                    }
+                if (_blurRenderers.Count > 0)
+                {
+                    var shaders = _blurRenderers.SelectMany(r => r.sharedMaterials).Where(m => m != null && IsBlurShader(m.shader)).Select(m => m.shader.name).Distinct();
+                    FreeHStudioSceneLoader.Logger.LogInfo($"Blur items of the scene: {_blurRenderers.Count} ({string.Join(", ", shaders.ToArray())}), {(show ? "shown" : $"{_hiddenBlurRenderers.Count} hidden")}");
+                }
+            }
+            catch (Exception ex)
+            {
+                FreeHStudioSceneLoader.Logger.LogWarning($"Could not switch the blur items of the scene: {ex.Message}");
+            }
+        }
+
+        #endregion
+
+        #region Fog, depth of field and vignette
+
+        private class SavedEffect
+        {
+            public Behaviour Effect;
+            public bool Enabled;
+            public readonly Dictionary<string, object> Values = new Dictionary<string, object>();
+        }
+
+        private static Camera _effectsCamera;
+        private static CameraEffectorConfig _effectsConfig;
+        private static bool _effectsSaved, _oldRenderFog;
+        private static float _oldRenderFogStart;
+        private static Color _oldRenderFogColor;
+        private static UnityEngine.SceneManagement.Scene _effectsScene;
+        private static readonly List<SavedEffect> _savedEffects = new List<SavedEffect>();
+        private static readonly Dictionary<string, bool> _oldConfigUse = new Dictionary<string, bool>();
+
+        /// <summary>The camera effects the map sets (SunLightInfo.SetFog/SetDOF/SetVignette) and the switches of CameraEffectorConfig.</summary>
+        private static readonly string[][] CameraEffects =
+        {
+            new[] { "GlobalFog", "_useFog", "height", "startDistance" },
+            new[] { "DepthOfField", "_useDOF", "focalSize", "aperture", "focalTransform" },
+            new[] { "VignetteAndChromaticAberration", "_useVignette", "intensity", "blur", "blurSpread" },
+        };
+
+        /// <summary>The vignette of Studio's camera (CharaStudio_Data/level2): only switched on/off by the scene.</summary>
+        private const float StudioVignetteIntensity = 0.1f, StudioVignetteBlur = 0.2f, StudioVignetteBlurSpread = 0.75f;
+
+        private static Behaviour CameraEffect(Camera camera, string name) =>
+            camera.GetComponents<Behaviour>().FirstOrDefault(b => b != null && b.GetType().Name == name);
+
+        private static void SetEffectField(Behaviour effect, string name, object value)
+        {
+            var field = HarmonyLib.AccessTools.Field(effect.GetType(), name);
+            if (field != null) field.SetValue(effect, value);
+        }
+
+        /// <summary>
+        /// The game turns on the fog, depth of field and vignette of its graphic settings with the map's values
+        /// (SunLightInfo), e.g. a focal point somewhere on the map that blurs the scene. Studio uses the scene's own
+        /// settings instead (SystemButtonCtrl.FogInfo/DOFInfo/VignetteInfo): no fog and no depth of field in most scenes.
+        /// Unless the scene is set to keep the map's, do as Studio does while it is placed.
+        /// </summary>
+        internal static void ApplySceneCameraEffects(Camera camera)
+        {
+            if (_sceneInfo == null || Settings == null || camera == null) return;
+            try
+            {
+                if (Settings.MapEffects)
+                {
+                    RestoreSceneCameraEffects();
+                    _effectsCamera = camera;
+                    FreeHStudioSceneLoader.Logger.LogInfo("Camera effects: the H map's fog, depth of field and vignette");
+                    return;
+                }
+                _effectsCamera = camera;
+                if (!_effectsSaved)
+                {
+                    _savedEffects.Clear();
+                    _oldConfigUse.Clear();
+                    _effectsConfig = camera.GetComponent<CameraEffectorConfig>();
+                    foreach (var names in CameraEffects)
+                    {
+                        var effect = CameraEffect(camera, names[0]);
+                        if (effect != null)
+                        {
+                            var saved = new SavedEffect { Effect = effect, Enabled = effect.enabled };
+                            for (int i = 2; i < names.Length; i++)
+                            {
+                                var field = HarmonyLib.AccessTools.Field(effect.GetType(), names[i]);
+                                if (field != null) saved.Values[names[i]] = field.GetValue(effect);
+                            }
+                            _savedEffects.Add(saved);
+                        }
+                        // The game's config switches them every frame (CameraEffectorConfig.Update) unless told not to
+                        if (_effectsConfig != null)
+                        {
+                            var use = HarmonyLib.Traverse.Create(_effectsConfig).Field(names[1]);
+                            _oldConfigUse[names[1]] = use.GetValue<bool>();
+                            use.SetValue(false);
+                        }
+                    }
+                    _oldRenderFog = RenderSettings.fog;
+                    _oldRenderFogColor = RenderSettings.fogColor;
+                    _oldRenderFogStart = RenderSettings.fogStartDistance;
+                    _effectsScene = UnityEngine.SceneManagement.SceneManager.GetActiveScene();
+                    _effectsSaved = true;
+                }
+
+                var fog = CameraEffect(camera, "GlobalFog");
+                if (fog != null)
+                {
+                    if (_sceneInfo.enableFog)
+                    {
+                        SetEffectField(fog, "height", _sceneInfo.fogHeight);
+                        SetEffectField(fog, "startDistance", _sceneInfo.fogStartDistance);
+                    }
+                    fog.enabled = _sceneInfo.enableFog;
+                }
+                RenderSettings.fog = _sceneInfo.enableFog;
+                if (_sceneInfo.enableFog)
+                {
+                    RenderSettings.fogColor = _sceneInfo.fogColor;
+                    RenderSettings.fogStartDistance = _sceneInfo.fogStartDistance;
+                }
+
+                string focus = "";
+                var dof = CameraEffect(camera, "DepthOfField");
+                if (dof != null)
+                {
+                    if (_sceneInfo.enableDepth)
+                    {
+                        SetEffectField(dof, "focalSize", _sceneInfo.depthFocalSize);
+                        SetEffectField(dof, "aperture", _sceneInfo.depthAperture);
+                        // Studio focuses on its camera target; the H camera has one too
+                        var control = camera.GetComponent<CameraControl_Ver2>();
+                        var target = control != null ? control.targetTex : null;
+                        if (target != null) SetEffectField(dof, "focalTransform", target);
+                        focus = target != null ? $", focus on {target.name}" : ", focus kept";
+                    }
+                    dof.enabled = _sceneInfo.enableDepth;
+                }
+
+                var vignette = CameraEffect(camera, "VignetteAndChromaticAberration");
+                if (vignette != null)
+                {
+                    SetEffectField(vignette, "intensity", StudioVignetteIntensity);
+                    SetEffectField(vignette, "blur", StudioVignetteBlur);
+                    SetEffectField(vignette, "blurSpread", StudioVignetteBlurSpread);
+                    vignette.enabled = _sceneInfo.enableVignette;
+                }
+
+                string OnOff(bool on, Behaviour effect) => effect == null ? "none on the camera" : on ? "on" : "off";
+                FreeHStudioSceneLoader.Logger.LogInfo($"Camera effects: the scene's, fog {OnOff(_sceneInfo.enableFog, fog)}, depth of field {OnOff(_sceneInfo.enableDepth, dof)}{focus}, vignette {OnOff(_sceneInfo.enableVignette, vignette)}");
+            }
+            catch (Exception ex)
+            {
+                FreeHStudioSceneLoader.Logger.LogWarning($"Could not set the camera effects of the scene: {ex.Message}");
+            }
+        }
+
+        private static void RestoreSceneCameraEffects()
+        {
+            if (_effectsSaved)
+            {
+                foreach (var saved in _savedEffects)
+                {
+                    if (saved.Effect == null) continue;
+                    foreach (var kv in saved.Values) SetEffectField(saved.Effect, kv.Key, kv.Value);
+                    saved.Effect.enabled = saved.Enabled;
+                }
+                if (_effectsConfig != null)
+                    foreach (var kv in _oldConfigUse) HarmonyLib.Traverse.Create(_effectsConfig).Field(kv.Key).SetValue(kv.Value);
+                // RenderSettings belong to the active scene: leave another scene's alone
+                if (UnityEngine.SceneManagement.SceneManager.GetActiveScene() == _effectsScene)
+                {
+                    RenderSettings.fog = _oldRenderFog;
+                    RenderSettings.fogColor = _oldRenderFogColor;
+                    RenderSettings.fogStartDistance = _oldRenderFogStart;
+                }
+            }
+            _effectsSaved = false;
+            _savedEffects.Clear();
+            _oldConfigUse.Clear();
+            _effectsConfig = null;
+            _effectsCamera = null;
+        }
+
+        #endregion
+
         private static void RestoreSceneEffects()
         {
+            try { RestoreSceneCameraEffects(); }
+            catch (Exception ex) { FreeHStudioSceneLoader.Logger.LogWarning($"Could not restore the camera effects: {ex.Message}"); }
             try { RestoreSceneOcclusion(); }
             catch (Exception ex) { FreeHStudioSceneLoader.Logger.LogWarning($"Could not restore the ambient occlusion: {ex.Message}"); }
             if (_oldAmbientShadow != null)
