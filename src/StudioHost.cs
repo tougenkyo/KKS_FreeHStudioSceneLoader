@@ -451,6 +451,7 @@ namespace KKS_FreeHStudioSceneLoader
             _timelineXml = ReadSceneString("timeline", "sceneInfo");
             _constraintsXml = ReadSceneString("nodesConstraints", "constraints");
             _kkpeSceneXml = ReadSceneString("kkpe", "sceneInfo");
+            SceneMaterials.Read();
         }
 
         private static string ReadSceneString(string id, string key)
@@ -560,6 +561,7 @@ namespace KKS_FreeHStudioSceneLoader
             _sceneCharacters.Clear();
             _allObjects.Clear();
             _timelineXml = _constraintsXml = _kkpeSceneXml = null;
+            SceneMaterials.Clear();
             if (!Created) return;
             // Reading a scene registers each object's ChangeAmount by dicKey, and Studio.AddChangeAmount keeps the first
             // one for a key. Without clearing, reading the scene again (choosing it twice) left the old ones there: the
@@ -831,6 +833,12 @@ namespace KKS_FreeHStudioSceneLoader
             }
             ApplyScales();
             HideInsideHiddenNodes();
+            // Once, after the items on characters were placed too (copying a material twice would make two copies)
+            if (!_materialsApplied)
+            {
+                _materialsApplied = true;
+                SceneMaterials.Apply(_host != null ? _host.transform : null);
+            }
             ApplyBlurItems();
             FreeHStudioSceneLoader.Logger.LogInfo($"Studio scene characters placed: {loaded}");
             if (Settings != null && Settings.CharaVoices) PlayVoices();
@@ -2085,6 +2093,9 @@ namespace KKS_FreeHStudioSceneLoader
             }
         }
 
+        /// <summary>Whether MaterialEditor's edits were applied to the placed scene (once per placement).</summary>
+        private static bool _materialsApplied;
+
         #region Blur and depth of field items
 
         private static readonly List<Renderer> _blurRenderers = new List<Renderer>();
@@ -2531,6 +2542,7 @@ namespace KKS_FreeHStudioSceneLoader
         /// </summary>
         internal static void UnloadOverlay()
         {
+            _materialsApplied = false;
             SceneAnimator.Destroy();
             RestoreMap();
             HideBackground();

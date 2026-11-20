@@ -21,7 +21,7 @@ namespace KKS_FreeHStudioSceneLoader
     {
         public const string GUID = "local.kks.freehstudiosceneloader";
         public const string PluginName = "Free H Studio Scene Loader (KKS port, experimental)";
-        public const string Version = "0.6.7";
+        public const string Version = "0.6.8";
 
         internal static new ManualLogSource Logger;
         internal static FreeHStudioSceneLoader Instance;
